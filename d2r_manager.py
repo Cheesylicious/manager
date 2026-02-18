@@ -15,6 +15,7 @@ from PIL import Image
 import d2r_unlocker
 import d2r_input
 from d2r_tutorial import TutorialAssistant
+from d2r_runewords import RunewordConfigurator
 
 # --- CONFIG & KONSTANTEN ---
 CONFIG_FILE = "d2r_accounts.json"
@@ -47,7 +48,7 @@ class D2RManager(ctk.CTk):
         super().__init__()
 
         self.title("D2R Manager | Ultimate Edition")
-        self.geometry("900x850")
+        self.geometry("950x900")
 
         self.settings = {
             "first_run": True,
@@ -59,7 +60,16 @@ class D2RManager(ctk.CTk):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
+        # Tabview Integration zur Monolithen-Vermeidung
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        self.tab_accounts = self.tabview.add("Accounts & Start")
+        self.tab_runewords = self.tabview.add("Runenwort Konfigurator")
+
         self.create_widgets()
+        self.create_runeword_tab()
+
         self.overlay = None
         self.blocker = None
 
@@ -95,10 +105,15 @@ class D2RManager(ctk.CTk):
     def save_config(self):
         with open(CONFIG_FILE, 'w') as f: json.dump(self.settings, f, indent=4)
 
-    # --- UI ---
+    # --- UI TABS ---
+    def create_runeword_tab(self):
+        self.rw_tool = RunewordConfigurator(self.tab_runewords)
+        self.rw_tool.pack(fill="both", expand=True)
+
     def create_widgets(self):
-        self.main_frame = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
-        self.main_frame.grid(row=0, column=0, sticky="nsew")
+        # Wir nutzen den ursprünglichen main_frame jetzt innerhalb des Tabs
+        self.main_frame = ctk.CTkScrollableFrame(self.tab_accounts, corner_radius=0, fg_color="transparent")
+        self.main_frame.pack(fill="both", expand=True)
         self.main_frame.grid_columnconfigure(0, weight=1)
 
         # HEADER
@@ -231,6 +246,12 @@ class D2RManager(ctk.CTk):
                 "text": "Wähle einen Account in der Liste aus und drücke diesen großen Knopf.\n\n⚠️ ACHTUNG: Ein rotes Fenster erscheint. Ab da: Finger weg von Maus & Tastatur! Das Programm übernimmt die Steuerung.",
                 "target": self.btn_launch,
                 "pos": "top"
+            },
+            {
+                "title": "6. NEU: Runenwörter",
+                "text": "Oben im zweiten Tab findest du nun den Runenwort-Konfigurator für deine Runs!",
+                "target": self.tabview,
+                "pos": "bottom"
             }
         ]
         TutorialAssistant(self, steps)
@@ -250,7 +271,8 @@ class D2RManager(ctk.CTk):
 
     def refresh(self):
         for i in self.tree.get_children(): self.tree.delete(i)
-        for a in self.settings["accounts"]: self.tree.insert("", "end", values=(a["name"], a["path"], a["email"]))
+        for a in self.settings.get("accounts", []): self.tree.insert("", "end",
+                                                                     values=(a["name"], a["path"], a["email"]))
 
     def on_select(self, e):
         s = self.tree.selection()
@@ -281,6 +303,7 @@ class D2RManager(ctk.CTk):
         w = self.ew.get()
         if not n or not p: return
         data = {"name": n, "path": p, "email": e, "password": self.obscure(w)}
+        if "accounts" not in self.settings: self.settings["accounts"] = []
         found = False
         for i, a in enumerate(self.settings["accounts"]):
             if a["name"] == n: self.settings["accounts"][i] = data; found = True; break
@@ -357,15 +380,15 @@ class D2RManager(ctk.CTk):
 
     # --- CALIBRATION & LAUNCH (SMART) ---
     def start_calibration(self):
-        if not self.settings["accounts"]:
+        if not self.settings.get("accounts"):
             messagebox.showerror("Fehler",
-                                 "Keine Accounts gefunden!\n\nBitte erstelle zuerst einen Account und wähle den Pfad zur Battle.net Launcher.exe aus, damit wir wissen, was wir starten sollen.")
+                                 "Keine Accounts gefunden!\n\nBitte erstelle zuerst einen Account.")
             return
 
         sel = self.tree.selection()
         if not sel:
             messagebox.showwarning("Auswahl fehlt",
-                                   "Welchen Launcher sollen wir kalibrieren?\n\nBitte klicke in der Liste oben auf den Account, dessen Launcher du öffnen möchtest.")
+                                   "Welchen Launcher sollen wir kalibrieren?")
             return
 
         name = self.tree.item(sel[0])['values'][0]
@@ -396,7 +419,7 @@ class D2RManager(ctk.CTk):
                 subprocess.Popen([path], cwd=os.path.dirname(path))
             except Exception as e:
                 self.hide_overlay()
-                messagebox.showerror("Start Fehler", f"Konnte Launcher nicht starten:\n{e}")
+                messagebox.showerror("Start Fehler", f"Fehler:\n{e}")
                 return
 
             hwnd = 0
@@ -407,18 +430,13 @@ class D2RManager(ctk.CTk):
 
             if not hwnd:
                 self.hide_overlay()
-                messagebox.showerror("Timeout", "Launcher Fenster nicht gefunden!\nIst Battle.net richtig gestartet?")
+                messagebox.showerror("Timeout", "Launcher nicht gefunden.")
                 return
 
-            # --- WINDOW POS FIX: Hart auf 0,0 setzen ---
             user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0040)
             user32.SetForegroundWindow(hwnd)
             time.sleep(1.0)
 
-            self.show_overlay("Launcher gefunden! Los geht's.")
-            time.sleep(1.0)
-
-            # Updated Steps with instructions to type
             steps = [
                 ("Account wechseln", "switch_x", "switch_y"),
                 ("E-Mail Feld", "email_x", "email_y"),
@@ -428,32 +446,20 @@ class D2RManager(ctk.CTk):
             ]
 
             for i, (txt, kx, ky) in enumerate(steps):
-                display_text = f"SCHRITT {i + 1}/5:\nKlicke auf '{txt}'"
-
-                # Special instructions for typing
-                if i == 1:  # Email Step
-                    display_text += "\n\nWICHTIG: Tippe danach deine E-Mail ein,\ndamit du weiterkommst!"
-
-                if i == 3:  # Password Step
-                    self.show_overlay("Warte auf Passwort-Feld...\n(Klicke notfalls selbst 'Fortfahren')")
-                    time.sleep(2.0)
-                    display_text = f"SCHRITT {i + 1}/5:\nKlicke auf '{txt}'"
-
-                self.show_overlay(display_text)
+                self.show_overlay(f"SCHRITT {i + 1}/5:\nKlicke auf '{txt}'")
                 self.wait_for_click()
                 cx, cy = self.get_rel_pos(hwnd)
                 self.settings["coords"][kx] = cx;
                 self.settings["coords"][ky] = cy
-                print("\a");
                 time.sleep(0.5)
 
             self.save_config()
-            self.show_overlay("FERTIG! Positionen gespeichert.")
+            self.show_overlay("FERTIG! Gespeichert.")
             time.sleep(2)
             self.hide_overlay()
 
         except Exception as e:
-            self.hide_overlay()
+            self.hide_overlay();
             print(e)
 
     def find_visible_window(self, title_substring):
@@ -488,13 +494,11 @@ class D2RManager(ctk.CTk):
             self.status_bar.configure(text="1. Führe Unlock durch...", text_color="orange")
             try:
                 d2r_unlocker.main()
-            except Exception as ex:
-                print(f"Unlocker: {ex}")
+            except:
+                pass
             time.sleep(1)
 
-            path = acc["path"];
-            email = acc["email"];
-            pwd = self.deobscure(acc["password"])
+            path, email, pwd = acc["path"], acc["email"], self.deobscure(acc["password"])
             is_launcher = "launcher" in path.lower() or "battle.net" in path.lower()
             title = WINDOW_TITLE_LAUNCHER if is_launcher else WINDOW_TITLE_GAME
             coords = self.settings.get("coords", {})
@@ -511,52 +515,45 @@ class D2RManager(ctk.CTk):
 
             if hwnd == 0:
                 self.status_bar.configure(text="Timeout", text_color="red");
-                self.btn_launch.configure(state="normal")
+                self.btn_launch.configure(state="normal");
                 self.after(0, self.close_blocker);
                 return
 
-            self.status_bar.configure(text="Login läuft...", text_color="white")
-            time.sleep(1)
-
-            # WINDOW POS FIX AUCH HIER
             user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0040)
-            user32.SetForegroundWindow(hwnd)
+            user32.SetForegroundWindow(hwnd);
             time.sleep(1)
 
             rect = RECT();
             user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            win_x = rect.left;
-            win_y = rect.top
+            win_x, win_y = rect.left, rect.top
 
             if is_launcher and email:
-                if coords.get("switch_x", 0) == 0:
-                    messagebox.showwarning("Fehler", "Kalibrieren!")
-                    self.btn_launch.configure(state="normal");
-                    self.after(0, self.close_blocker);
-                    return
-                d2r_input.click_at(win_x + coords["switch_x"], win_y + coords["switch_y"])
+                d2r_input.click_at(win_x + coords["switch_x"], win_y + coords["switch_y"]);
                 time.sleep(3.0)
                 d2r_input.click_at(win_x + coords["email_x"], win_y + coords["email_y"]);
                 time.sleep(0.5)
                 d2r_input.press_key(d2r_input.SCANCODES['ctrl']);
-                d2r_input.click_key(d2r_input.SCANCODES['a']);
+                d2r_input.click_key(d2r_input.SCANCODES['a'])
                 d2r_input.release_key(d2r_input.SCANCODES['ctrl']);
                 d2r_input.click_key(d2r_input.SCANCODES['backspace'])
                 d2r_input.type_string(email);
                 time.sleep(0.5)
+
                 if coords.get("continue_x", 0) != 0:
                     d2r_input.click_at(win_x + coords["continue_x"], win_y + coords["continue_y"])
                 else:
                     d2r_input.click_key(d2r_input.SCANCODES['enter'])
+
                 time.sleep(2.0)
                 if coords.get("pwd_x", 0) != 0: d2r_input.click_at(win_x + coords["pwd_x"], win_y + coords["pwd_y"])
                 d2r_input.type_string(pwd);
                 time.sleep(0.5)
+
                 if coords.get("login_x", 0) != 0:
                     d2r_input.click_at(win_x + coords["login_x"], win_y + coords["login_y"])
                 else:
                     d2r_input.click_key(d2r_input.SCANCODES['enter'])
-                self.status_bar.configure(text="FERTIG! Bitte PLAY drücken.", text_color="green")
+                self.status_bar.configure(text="FERTIG!", text_color="green")
             elif not is_launcher:
                 d2r_input.click_key(d2r_input.SCANCODES['space']);
                 time.sleep(3)
@@ -564,11 +561,11 @@ class D2RManager(ctk.CTk):
                 d2r_input.click_key(d2r_input.SCANCODES['tab'])
                 d2r_input.type_string(pwd);
                 d2r_input.click_key(d2r_input.SCANCODES['enter'])
-                time.sleep(5)
+                time.sleep(5);
                 d2r_unlocker.main()
-                self.status_bar.configure(text="FERTIG: Spiel läuft & Unlocked.", text_color="green")
+                self.status_bar.configure(text="FERTIG!", text_color="green")
         except Exception as e:
-            self.status_bar.configure(text=f"Fehler: {e}", text_color="red");
+            self.status_bar.configure(text="Fehler", text_color="red");
             print(e)
         self.after(0, self.close_blocker);
         self.btn_launch.configure(state="normal")
@@ -576,7 +573,7 @@ class D2RManager(ctk.CTk):
 
 if __name__ == "__main__":
     if ctypes.windll.shell32.IsUserAnAdmin():
-        app = D2RManager()
+        app = D2RManager();
         app.mainloop()
     else:
         messagebox.showerror("Admin", "Bitte als Admin starten!")
