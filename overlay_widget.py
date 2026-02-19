@@ -2,6 +2,7 @@ import customtkinter as ctk
 from overlay_config import TrackerConfig, STEPS_INFO
 from overlay_calibration import CalibrationOverlay
 from overlay_tracker import RunTrackerOverlay
+from rune_filter_ui import RuneFilterWindow
 
 
 class TrackerConfigurator(ctk.CTkScrollableFrame):
@@ -10,12 +11,6 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         self.app = main_app_ref
         self.overlay = None
         self.config_data = TrackerConfig.load()
-
-        self.rune_names = [
-            "El", "Eld", "Tir", "Nef", "Eth", "Ith", "Tal", "Ral", "Ort", "Thul", "Amn", "Sol", "Shael", "Dol", "Hel",
-            "Io", "Lum", "Ko", "Fal", "Lem", "Pul", "Um", "Mal", "Ist", "Gul", "Vex", "Ohm", "Lo", "Sur", "Ber",
-            "Jah", "Cham", "Zod"
-        ]
 
         self.status_labels = {}
         self.sound_vars = {}
@@ -62,13 +57,19 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
 
         # Alarm
         self.drop_var = ctk.BooleanVar(value=self.config_data.get("drop_alert_active", False))
-        ctk.CTkCheckBox(d_frame, text="🔸 High Rune Alarm:", variable=self.drop_var, command=self.save_drop,
+        ctk.CTkCheckBox(d_frame, text="🔸 Runen Alarm:", variable=self.drop_var, command=self.save_drop,
                         text_color="#FFD700").pack(side="left", padx=(0, 5))
 
-        # Pickup Schalter
+        # NEU: Runen-Filter Button statt Dropdown
+        self.btn_rune_filter = ctk.CTkButton(d_frame, text="⚙️ Filter einstellen", width=120,
+                                             command=self.open_rune_filter, fg_color="#444444")
+        self.btn_rune_filter.pack(side="left", padx=(5, 10))
+
+        # Pickup Schalter mit logischer Verknüpfung
         self.pickup_var = ctk.BooleanVar(value=self.config_data.get("auto_pickup", False))
-        ctk.CTkCheckBox(d_frame, text="🖐 Auto-Pickup", variable=self.pickup_var, command=self.save_pickup,
-                        text_color="#ff7f50").pack(side="left", padx=(10, 5))
+        ctk.CTkCheckBox(d_frame, text="🖐 Auto-Pickup (Aktiviert Alarm!)", variable=self.pickup_var,
+                        command=self.save_pickup,
+                        text_color="#ff7f50").pack(side="left", padx=(5, 5))
 
         # Pickup Verzögerung
         delay_frame = ctk.CTkFrame(d_frame, fg_color="transparent")
@@ -88,11 +89,11 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         self.pickup_max_entry.pack(side="left")
 
         self.xp_var = ctk.BooleanVar(value=self.config_data.get("xp_active", False))
-        ctk.CTkCheckBox(d_frame, text="📈 EXP-Tracker einblenden", variable=self.xp_var, command=self.save_xp,
+        ctk.CTkCheckBox(d_frame, text="📈 EXP-Tracker", variable=self.xp_var, command=self.save_xp,
                         text_color="#00ccff").pack(side="left", padx=(10, 20))
 
         self.ghost_var = ctk.BooleanVar(value=self.config_data.get("clickthrough", False))
-        cb_ghost = ctk.CTkCheckBox(d_frame, text="👻 Overlay durchklickbar", variable=self.ghost_var,
+        cb_ghost = ctk.CTkCheckBox(d_frame, text="👻 Ghost-Modus", variable=self.ghost_var,
                                    command=self.save_ghost, text_color="#aaaaaa")
         cb_ghost.pack(side="left", padx=5)
 
@@ -134,6 +135,15 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             btn_single.pack(side="right", padx=10, pady=4)
 
         self.after(500, self.update_status_list)
+
+    def open_rune_filter(self):
+        RuneFilterWindow(self.app, self.config_data, self.on_runes_updated)
+
+    def on_runes_updated(self):
+        TrackerConfig.save(self.config_data)
+        if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
+            self.overlay.drop_watcher.config = self.config_data
+            self.overlay.drop_watcher._load_templates()
 
     def sync_ui(self):
         for key, var in self.sound_vars.items():
@@ -179,12 +189,32 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             self.overlay.reload_config()
 
     def save_drop(self):
-        self.config_data["drop_alert_active"] = self.drop_var.get()
+        is_active = self.drop_var.get()
+        self.config_data["drop_alert_active"] = is_active
+
+        if not is_active and self.pickup_var.get():
+            self.pickup_var.set(False)
+            self.config_data["auto_pickup"] = False
+
         TrackerConfig.save(self.config_data)
+        if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
+            self.overlay.drop_watcher.config = self.config_data
+            self.overlay.drop_watcher.update_config(is_active)
 
     def save_pickup(self):
-        self.config_data["auto_pickup"] = self.pickup_var.get()
+        is_active = self.pickup_var.get()
+        self.config_data["auto_pickup"] = is_active
+
+        if is_active and not self.drop_var.get():
+            self.drop_var.set(True)
+            self.config_data["drop_alert_active"] = True
+
         TrackerConfig.save(self.config_data)
+
+        if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
+            self.overlay.drop_watcher.config = self.config_data
+            if is_active:
+                self.overlay.drop_watcher.update_config(True)
 
     def save_pickup_delay(self):
         try:
@@ -194,11 +224,10 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             self.config_data["pickup_delay_max"] = max_val
             TrackerConfig.save(self.config_data)
 
-            # Runtime Update an den Scanner senden falls aktiv
             if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
                 self.overlay.drop_watcher.config = self.config_data
         except ValueError:
-            pass  # Ignorieren, wenn der Nutzer gerade etwas tippt (z.B. Feld leer macht)
+            pass
 
     def save_xp(self):
         self.config_data["xp_active"] = self.xp_var.get()

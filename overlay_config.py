@@ -61,9 +61,16 @@ STEPS_INFO = {
     )
 }
 
+
 class TrackerConfig:
     @staticmethod
     def load():
+        all_runes = [
+            "El", "Eld", "Tir", "Nef", "Eth", "Ith", "Tal", "Ral", "Ort", "Thul", "Amn", "Sol", "Shael", "Dol", "Hel",
+            "Io", "Lum", "Ko", "Fal", "Lem", "Pul", "Um", "Mal", "Ist", "Gul", "Vex", "Ohm", "Lo", "Sur", "Ber",
+            "Jah", "Cham", "Zod"
+        ]
+
         if os.path.exists(TRACKER_CONFIG_FILE):
             try:
                 with open(TRACKER_CONFIG_FILE, 'r') as f:
@@ -75,8 +82,8 @@ class TrackerConfig:
                         "width": 360, "height": 260, "alpha": 1.0,
                         "drop_alert_active": False, "auto_pickup": False,
                         "pickup_delay_min": 150, "pickup_delay_max": 350,
-                        "xp_active": False,
-                        "min_rune": "Pul", "clickthrough": False
+                        "xp_active": False, "clickthrough": False,
+                        "allowed_runes": all_runes
                     }
                     for k, v in defaults.items():
                         if k not in data: data[k] = v
@@ -89,8 +96,8 @@ class TrackerConfig:
             "hp_sound": True, "mana_sound": False, "merc_sound": True, "drop_sound": True,
             "width": 360, "height": 260, "drop_alert_active": False, "auto_pickup": False,
             "pickup_delay_min": 150, "pickup_delay_max": 350,
-            "xp_active": False,
-            "min_rune": "Pul", "clickthrough": False
+            "xp_active": False, "clickthrough": False,
+            "allowed_runes": all_runes
         }
 
     @staticmethod

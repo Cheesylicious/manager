@@ -117,7 +117,6 @@ class RunTrackerOverlay(ctk.CTkToplevel):
             top_f = ctk.CTkFrame(f, fg_color="transparent")
             top_f.pack(fill="x", padx=4, pady=(4, 0))
 
-            # Neuer Pixel-Indikator
             indicator = ctk.CTkFrame(top_f, width=12, height=12, corner_radius=6, fg_color="#000000")
             indicator.pack(side="left", padx=(0, 4))
 
@@ -259,8 +258,10 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.lbl_status.configure(text="⏸️ PAUSIERT" if self.paused else "WARTEN...")
 
     def reset_current_run(self):
+        """Setzt den Timer auf 0 und erzwingt im nächsten Schleifendurchlauf einen Restart, falls man noch im Spiel ist."""
         self.start_time = 0
         self.in_game = False
+        self.current_state = "UNKNOWN"  # Das ist der FIX! Bricht die Status-Stagnation auf.
         self.lbl_timer.configure(text="00:00.00")
 
     def reset_session(self):
@@ -437,19 +438,26 @@ class RunTrackerOverlay(ctk.CTkToplevel):
                             self._press_key(self.hp_key)
                             self.last_potions["hp"] = now
                             if self.hp_sound and now - self.last_alarm_time > 2:
-                                winsound.Beep(1200, 150)
+                                threading.Thread(target=lambda: winsound.Beep(450, 250), daemon=True).start()
                                 self.last_alarm_time = now
+
                         if not mp_match and now - self.last_potions["mana"] > self.mana_delay:
                             self._press_key(self.mana_key)
                             self.last_potions["mana"] = now
                             if self.mana_sound and now - self.last_alarm_time > 2:
-                                winsound.Beep(800, 100)
+                                threading.Thread(target=lambda: winsound.Beep(2000, 100), daemon=True).start()
                                 self.last_alarm_time = now
+
                         if not mc_match and now - self.last_potions["merc"] > self.merc_delay:
                             self._press_key(self.merc_key, True)
                             self.last_potions["merc"] = now
                             if self.merc_sound and now - self.last_alarm_time > 2:
-                                winsound.Beep(1000, 150)
+                                def merc_snd():
+                                    winsound.Beep(800, 80)
+                                    time.sleep(0.05)
+                                    winsound.Beep(800, 80)
+
+                                threading.Thread(target=merc_snd, daemon=True).start()
                                 self.last_alarm_time = now
 
                         self._update_sensor_ui("hp", self.hp_key, hp_match, hp_col)
