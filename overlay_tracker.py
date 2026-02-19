@@ -5,7 +5,7 @@ import threading
 import math
 import winsound
 import ctypes
-from PIL import ImageGrab
+import mss
 
 from overlay_config import STEPS_INFO, TrackerConfig
 
@@ -32,6 +32,11 @@ except ImportError:
         from d2r_xp import XPWatcher
     except ImportError:
         XPWatcher = None
+
+try:
+    from zone_scanner import ZoneWatcher
+except ImportError:
+    ZoneWatcher = None
 
 
 class RunTrackerOverlay(ctk.CTkToplevel):
@@ -61,8 +66,13 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.attributes("-transparentcolor", self.bg_color)
         self.geometry(f"{self.current_width}x{self.current_height}+20+20")
 
-        self.drop_watcher = DropWatcher(config_data) if DropWatcher else None
+        # Liste für die im aktuellen Run gefundenen Runen
+        self.current_run_drops = []
+
+        # Hier übergeben wir unseren Callback (on_drop_detected) an den Scanner
+        self.drop_watcher = DropWatcher(config_data, drop_callback=self.on_drop_detected) if DropWatcher else None
         self.xp_watcher = XPWatcher(config_data) if XPWatcher else None
+        self.zone_watcher = ZoneWatcher(config_data) if ZoneWatcher else None
 
         self.main_frame = ctk.CTkFrame(self, fg_color="#1a1a1a", border_width=1, border_color="#444444",
                                        corner_radius=8)
@@ -81,6 +91,15 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.lbl_status = ctk.CTkLabel(self.content_frame, text="WARTEN...", font=("Roboto", 10, "bold"),
                                        text_color="#888888")
         self.lbl_status.pack()
+
+        self.lbl_zone = ctk.CTkLabel(self.content_frame, text="📍 Zone: Unbekannt", font=("Roboto", 12, "bold"),
+                                     text_color="#00ccff")
+        self.lbl_zone.pack(pady=(0, 2))
+
+        # --- NEU: Live-Loot Anzeige direkt im Overlay ---
+        self.lbl_live_loot = ctk.CTkLabel(self.content_frame, text="", font=("Roboto", 11, "bold"),
+                                          text_color="#FFD700")
+        self.lbl_live_loot.pack(pady=(0, 2))
 
         self.lbl_timer = ctk.CTkLabel(self.content_frame, text="00:00.00",
                                       font=("Roboto Mono", int(self.current_width * 0.11), "bold"),
@@ -149,6 +168,7 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.current_state = "UNKNOWN"
         self.last_xp_check = 0
         self.last_ghost_toggle = 0
+        self.last_zone_check = ""
 
         self.context_menu = tk.Menu(self, tearoff=0, bg="#2b2b2b", fg="white")
         self.context_menu.add_command(label="⏸️ Pause", command=self.toggle_pause)
@@ -159,7 +179,7 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.context_menu.add_command(label="❌ Beenden", command=self.stop_tracking)
 
         for w in [self.main_frame, self.content_frame, self.lbl_status, self.stats_frame, self.lbl_timer, self.lbl_xp,
-                  self.avg_frame]:
+                  self.avg_frame, self.lbl_zone, self.lbl_live_loot]:
             w.bind("<Button-1>", self.start_move)
             w.bind("<B1-Motion>", self.do_move)
             w.bind("<Button-3>", self.show_context_menu)
@@ -170,6 +190,13 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
         if self.config_data.get("clickthrough", False):
             self.after(300, lambda: self.set_clickthrough(True))
+
+    # --- NEU: Live-Update wenn eine Rune gefunden wurde ---
+    def on_drop_detected(self, drop_name):
+        if self.in_game and drop_name not in self.current_run_drops:
+            self.current_run_drops.append(drop_name)
+            drop_str = ", ".join(self.current_run_drops)
+            self.lbl_live_loot.configure(text=f"💎 Loot: [{drop_str}]")
 
     def reload_config(self):
         self.hp_key = self.config_data.get("hp_key", "Aus")
@@ -258,11 +285,12 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.lbl_status.configure(text="⏸️ PAUSIERT" if self.paused else "WARTEN...")
 
     def reset_current_run(self):
-        """Setzt den Timer auf 0 und erzwingt im nächsten Schleifendurchlauf einen Restart, falls man noch im Spiel ist."""
         self.start_time = 0
         self.in_game = False
-        self.current_state = "UNKNOWN"  # Das ist der FIX! Bricht die Status-Stagnation auf.
+        self.current_state = "UNKNOWN"
+        self.current_run_drops = []
         self.lbl_timer.configure(text="00:00.00")
+        self.lbl_live_loot.configure(text="")  # Feld wieder leeren
 
     def reset_session(self):
         self.run_history, self.run_count = [], 0
@@ -292,7 +320,7 @@ class RunTrackerOverlay(ctk.CTkToplevel):
     def toggle_history(self, event=None):
         self.is_expanded = not self.is_expanded
         if self.is_expanded:
-            self.geometry(f"{self.current_width}x{self.current_height + 220}")
+            self.geometry(f"{self.current_width}x{self.current_height + 250}")
             self.history_frame.pack(fill="both", expand=True, padx=5, pady=(0, 10), before=self.guardian_frame)
             self.update_history_list()
         else:
@@ -303,42 +331,63 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         for w in self.history_frame.winfo_children(): w.destroy()
         recent = self.run_history[-10:]
         recent.reverse()
-        for i, dur in enumerate(recent):
+
+        for i, run_data in enumerate(recent):
             row = ctk.CTkFrame(self.history_frame, fg_color="transparent")
-            row.pack(fill="x", padx=5)
-            ctk.CTkLabel(row, text=f"{len(self.run_history) - i}.", font=("Roboto Mono", 9)).pack(side="left")
-            ctk.CTkLabel(row, text=f"{int(dur // 60):02}:{int(dur % 60):02}", font=("Roboto Mono", 9)).pack(
-                side="right")
+            row.pack(fill="x", padx=5, pady=2)
+
+            dur = run_data["duration"]
+            drops = run_data.get("drops", [])
+
+            ctk.CTkLabel(row, text=f"{len(self.run_history) - i}.", font=("Roboto Mono", 10)).pack(side="left")
+
+            time_lbl = ctk.CTkLabel(row, text=f"{int(dur // 60):02}:{int(dur % 60):02}", font=("Roboto Mono", 10))
+            time_lbl.pack(side="right")
+
+            if drops:
+                drop_str = " + ".join(drops)
+                ctk.CTkLabel(row, text=f"[{drop_str}]", font=("Roboto", 10, "bold"), text_color="#FFD700").pack(
+                    side="right", padx=(0, 10))
 
     def start_tracking(self):
         self.monitoring = True
         self.stop_event.clear()
         if self.drop_watcher: self.drop_watcher.start()
+        if self.zone_watcher: self.zone_watcher.start()
         threading.Thread(target=self._logic_loop, daemon=True).start()
         self.update_timer_gui()
 
     def stop_tracking(self):
         self.monitoring = False
         self.stop_event.set()
-        if self.drop_watcher:
-            self.drop_watcher.stop()
+        if self.drop_watcher: self.drop_watcher.stop()
+        if self.zone_watcher: self.zone_watcher.stop()
         TrackerConfig.save(self.config_data)
         self.destroy()
 
     def finish_run(self):
         if self.start_time == 0: return
         dur = time.time() - self.start_time
-        self.run_history.append(dur)
+
+        self.run_history.append({
+            "duration": dur,
+            "drops": list(self.current_run_drops)
+        })
+
         self.run_count += 1
         self.lbl_runs.configure(text=f"Runs: {self.run_count}")
         self.lbl_last.configure(text=f"Letzter: {int(dur // 60):02}:{int(dur % 60):02}")
-        avg = sum(self.run_history) / self.run_count
+
+        avg = sum(r["duration"] for r in self.run_history) / max(1, self.run_count)
         self.lbl_avg.configure(text=f"Ø {int(avg // 60):02}:{int(avg % 60):02}")
 
         self._update_xp_display(do_scan=False)
 
         if self.is_expanded: self.update_history_list()
+
         self.start_time = 0
+        self.current_run_drops = []
+        self.lbl_live_loot.configure(text="")  # Feld für neuen Run leeren
 
     def _update_xp_display(self, do_scan=True):
         if self.xp_watcher and self.config_data.get("xp_active"):
@@ -426,6 +475,12 @@ class RunTrackerOverlay(ctk.CTkToplevel):
                         self.lbl_status.configure(text="AKTIV IM SPIEL", text_color="#2da44e")
                         now = time.time()
 
+                        if self.zone_watcher:
+                            current_z = self.zone_watcher.current_zone
+                            if current_z != self.last_zone_check:
+                                self.lbl_zone.configure(text=f"📍 {current_z}")
+                                self.last_zone_check = current_z
+
                         if now - self.last_xp_check > 2.0:
                             self.last_xp_check = now
                             self._update_xp_display(do_scan=True)
@@ -497,8 +552,10 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
     def _check_single_pixel(self, point, mode):
         try:
-            image = ImageGrab.grab(bbox=(point["x"], point["y"], point["x"] + 1, point["y"] + 1))
-            c = image.getpixel((0, 0))
+            with mss.mss() as sct:
+                monitor = {"top": point["y"], "left": point["x"], "width": 1, "height": 1}
+                sct_img = sct.grab(monitor)
+                c = sct_img.pixel(0, 0)
 
             if mode == "match":
                 match = math.sqrt((c[0] - point["r"]) ** 2 + (c[1] - point["g"]) ** 2 + (c[2] - point["b"]) ** 2) < 35

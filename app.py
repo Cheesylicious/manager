@@ -25,6 +25,15 @@ def run_as_admin():
 
 
 def main():
+    # --- NEU: DPI AWARENESS (Zwingt Windows, die echte Auflösung zu nutzen) ---
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1) # Windows 8.1+
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware() # Windows Vista/7/8
+        except:
+            pass
+
     # 1. Admin-Check
     if not is_admin():
         run_as_admin()

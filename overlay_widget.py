@@ -3,7 +3,8 @@ from overlay_config import TrackerConfig, STEPS_INFO
 from overlay_calibration import CalibrationOverlay
 from overlay_tracker import RunTrackerOverlay
 from rune_filter_ui import RuneFilterWindow
-
+from rune_capture_ui import RuneCaptureWindow
+from zone_capture_ui import ZoneCaptureWindow
 
 class TrackerConfigurator(ctk.CTkScrollableFrame):
     def __init__(self, parent, main_app_ref):
@@ -52,27 +53,29 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             ctk.CTkCheckBox(p, text="🔔 Sound", variable=cb, width=20,
                             command=lambda k=k, var=cb: self.save_conf(f"{k}_sound", var.get())).grid(row=i, column=3)
 
+        # REIHE 1: ALARM & FILTER & SCANNER
         d_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        d_frame.pack(fill="x", padx=15, pady=10)
+        d_frame.pack(fill="x", padx=15, pady=(15, 5))
 
-        # Alarm
         self.drop_var = ctk.BooleanVar(value=self.config_data.get("drop_alert_active", False))
         ctk.CTkCheckBox(d_frame, text="🔸 Runen Alarm:", variable=self.drop_var, command=self.save_drop,
                         text_color="#FFD700").pack(side="left", padx=(0, 5))
 
-        # NEU: Runen-Filter Button statt Dropdown
-        self.btn_rune_filter = ctk.CTkButton(d_frame, text="⚙️ Filter einstellen", width=120,
-                                             command=self.open_rune_filter, fg_color="#444444")
-        self.btn_rune_filter.pack(side="left", padx=(5, 10))
+        self.btn_rune_filter = ctk.CTkButton(d_frame, text="⚙️ Filter einstellen", width=120, command=self.open_rune_filter, fg_color="#444444")
+        self.btn_rune_filter.pack(side="left", padx=(5, 5))
 
-        # Pickup Schalter mit logischer Verknüpfung
+        self.btn_rune_capture = ctk.CTkButton(d_frame, text="📸 Rune aufnehmen", width=120, command=self.open_rune_capture, fg_color="#1f538d")
+        self.btn_rune_capture.pack(side="left", padx=(5, 10))
+
+        # REIHE 2: PICKUP & DELAY
+        p_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        p_frame.pack(fill="x", padx=15, pady=5)
+
         self.pickup_var = ctk.BooleanVar(value=self.config_data.get("auto_pickup", False))
-        ctk.CTkCheckBox(d_frame, text="🖐 Auto-Pickup (Aktiviert Alarm!)", variable=self.pickup_var,
-                        command=self.save_pickup,
-                        text_color="#ff7f50").pack(side="left", padx=(5, 5))
+        ctk.CTkCheckBox(p_frame, text="🖐 Auto-Pickup", variable=self.pickup_var, command=self.save_pickup,
+                        text_color="#ff7f50").pack(side="left", padx=(0, 5))
 
-        # Pickup Verzögerung
-        delay_frame = ctk.CTkFrame(d_frame, fg_color="transparent")
+        delay_frame = ctk.CTkFrame(p_frame, fg_color="transparent")
         delay_frame.pack(side="left", padx=(5, 20))
         ctk.CTkLabel(delay_frame, text="Verzögerung (ms):", font=("Roboto", 11)).pack(side="left", padx=(0, 5))
 
@@ -88,12 +91,19 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         self.pickup_max_entry.bind("<KeyRelease>", lambda e: self.save_pickup_delay())
         self.pickup_max_entry.pack(side="left")
 
+        # REIHE 3: ZONEN & EXP & GHOST
+        e_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        e_frame.pack(fill="x", padx=15, pady=(5, 15))
+
         self.xp_var = ctk.BooleanVar(value=self.config_data.get("xp_active", False))
-        ctk.CTkCheckBox(d_frame, text="📈 EXP-Tracker", variable=self.xp_var, command=self.save_xp,
-                        text_color="#00ccff").pack(side="left", padx=(10, 20))
+        ctk.CTkCheckBox(e_frame, text="📈 EXP-Tracker", variable=self.xp_var, command=self.save_xp,
+                        text_color="#00ccff").pack(side="left", padx=(0, 5))
+
+        self.btn_zone_capture = ctk.CTkButton(e_frame, text="🗺️ Zone aufnehmen", width=120, command=self.open_zone_capture, fg_color="#008080")
+        self.btn_zone_capture.pack(side="left", padx=(10, 20))
 
         self.ghost_var = ctk.BooleanVar(value=self.config_data.get("clickthrough", False))
-        cb_ghost = ctk.CTkCheckBox(d_frame, text="👻 Ghost-Modus", variable=self.ghost_var,
+        cb_ghost = ctk.CTkCheckBox(e_frame, text="👻 Ghost-Modus", variable=self.ghost_var,
                                    command=self.save_ghost, text_color="#aaaaaa")
         cb_ghost.pack(side="left", padx=5)
 
@@ -123,13 +133,10 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         for key, (name, _, _) in STEPS_INFO.items():
             row = ctk.CTkFrame(self.list_container, fg_color="#1a1a1a", corner_radius=4)
             row.pack(fill="x", pady=2)
-
             ctk.CTkLabel(row, text=name, font=("Roboto", 12)).pack(side="left", padx=10, pady=4)
-
             lbl_status = ctk.CTkLabel(row, text="?", font=("Roboto", 12, "bold"))
             lbl_status.pack(side="left", padx=20)
             self.status_labels[key] = lbl_status
-
             btn_single = ctk.CTkButton(row, text="Einzeln Kalibrieren", width=120, height=24, fg_color="#333",
                                        command=lambda k=key: self.calibrate_single(k))
             btn_single.pack(side="right", padx=10, pady=4)
@@ -139,11 +146,21 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
     def open_rune_filter(self):
         RuneFilterWindow(self.app, self.config_data, self.on_runes_updated)
 
+    def open_rune_capture(self):
+        RuneCaptureWindow(self.app, self.on_runes_updated)
+
+    def open_zone_capture(self):
+        ZoneCaptureWindow(self.app, self.on_zone_updated)
+
     def on_runes_updated(self):
         TrackerConfig.save(self.config_data)
         if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
             self.overlay.drop_watcher.config = self.config_data
             self.overlay.drop_watcher._load_templates()
+
+    def on_zone_updated(self):
+        if self.overlay and hasattr(self.overlay, 'zone_watcher') and self.overlay.zone_watcher:
+            self.overlay.zone_watcher._load_templates()
 
     def sync_ui(self):
         for key, var in self.sound_vars.items():
@@ -160,13 +177,11 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
 
     def update_status_list(self):
         if not self.winfo_exists(): return
-
         for key, lbl in self.status_labels.items():
             if key in self.config_data and self.config_data[key]:
                 lbl.configure(text="✅ Gespeichert", text_color="#2da44e")
             else:
                 lbl.configure(text="❌ Fehlt", text_color="#cf222e")
-
         self.after(1000, self.update_status_list)
 
     def calibrate_single(self, key):
@@ -174,8 +189,7 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
 
     def calibrate_missing(self):
         missing_keys = [k for k in STEPS_INFO.keys() if k not in self.config_data or not self.config_data[k]]
-        if not missing_keys:
-            return
+        if not missing_keys: return
         CalibrationOverlay(self.app, missing_keys, self.on_calib_done)
 
     def calibrate_all(self):
@@ -185,17 +199,14 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
     def save_conf(self, k, v):
         self.config_data[k] = v
         TrackerConfig.save(self.config_data)
-        if self.overlay:
-            self.overlay.reload_config()
+        if self.overlay: self.overlay.reload_config()
 
     def save_drop(self):
         is_active = self.drop_var.get()
         self.config_data["drop_alert_active"] = is_active
-
         if not is_active and self.pickup_var.get():
             self.pickup_var.set(False)
             self.config_data["auto_pickup"] = False
-
         TrackerConfig.save(self.config_data)
         if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
             self.overlay.drop_watcher.config = self.config_data
@@ -204,17 +215,13 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
     def save_pickup(self):
         is_active = self.pickup_var.get()
         self.config_data["auto_pickup"] = is_active
-
         if is_active and not self.drop_var.get():
             self.drop_var.set(True)
             self.config_data["drop_alert_active"] = True
-
         TrackerConfig.save(self.config_data)
-
         if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
             self.overlay.drop_watcher.config = self.config_data
-            if is_active:
-                self.overlay.drop_watcher.update_config(True)
+            if is_active: self.overlay.drop_watcher.update_config(True)
 
     def save_pickup_delay(self):
         try:
@@ -223,11 +230,9 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             self.config_data["pickup_delay_min"] = min_val
             self.config_data["pickup_delay_max"] = max_val
             TrackerConfig.save(self.config_data)
-
             if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
                 self.overlay.drop_watcher.config = self.config_data
-        except ValueError:
-            pass
+        except ValueError: pass
 
     def save_xp(self):
         self.config_data["xp_active"] = self.xp_var.get()
@@ -242,8 +247,7 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
     def save_ghost(self):
         self.config_data["clickthrough"] = self.ghost_var.get()
         TrackerConfig.save(self.config_data)
-        if self.overlay:
-            self.overlay.set_clickthrough(self.ghost_var.get())
+        if self.overlay: self.overlay.set_clickthrough(self.ghost_var.get())
 
     def on_calib_done(self, res):
         self.config_data.update(res)

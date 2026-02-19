@@ -7,30 +7,30 @@ import random
 import cv2
 import numpy as np
 import math
-from PIL import ImageGrab
+import mss
 
 try:
     from human_input import HumanMouse
 except ImportError:
     HumanMouse = None
 
-# --- CONFIG ---
 TEMPLATE_FOLDER = "runes_filter"
 
 
 class DropWatcher:
-    def __init__(self, config_data):
+    # NEU: drop_callback Parameter hinzugefügt
+    def __init__(self, config_data, drop_callback=None):
         self.running = False
         self.thread = None
         self.stop_event = threading.Event()
         self.config = config_data
+        self.drop_callback = drop_callback
 
         self.active = config_data.get("drop_alert_active", False)
 
         self.last_sound_time = 0
         self.cooldown = 3.0
 
-        # CLOSED-LOOP TRACKING (Echtzeit-Optik)
         self.last_click_time = 0
         self.active_target_name = None
         self.active_target_count = 0
@@ -39,9 +39,14 @@ class DropWatcher:
         self._load_templates()
 
     def _load_templates(self):
-        """Lädt Bilder, erstellt hochpräzise Binär-Signaturen und filtert den Rest."""
         self.templates = []
-        base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+
+        # Dynamische Pfad-Logik für EXE-Kompatibilität
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+
         folder_path = os.path.join(base_path, TEMPLATE_FOLDER)
 
         if not os.path.exists(folder_path):
@@ -76,7 +81,7 @@ class DropWatcher:
                 tmpl = cv2.imread(full_path)
                 if tmpl is not None:
 
-                    # BINARISIERUNG: Macht die orange Schrift WEISS, alles andere wird gelöscht (0)
+                    # Orange Schrift isolieren
                     b = tmpl[:, :, 0].astype(np.int16)
                     g = tmpl[:, :, 1].astype(np.int16)
                     r = tmpl[:, :, 2].astype(np.int16)
@@ -84,18 +89,14 @@ class DropWatcher:
 
                     tmpl_binary = (mask.astype(np.uint8) * 255)
 
-                    # Schneide das Template exakt auf die weisse Schrift zu (entfernt überflüssige Ränder)
+                    # Exakt auf die weisse Schrift zuschneiden
                     contours, _ = cv2.findContours(tmpl_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     if contours:
                         x, y, w, h = cv2.boundingRect(np.vstack(contours))
                         tmpl_cropped = tmpl_binary[y:y + h, x:x + w]
 
-                        # Die exakte Pixel-Signatur (Anzahl der weissen Pixel im Wort)
-                        white_px = cv2.countNonZero(tmpl_cropped)
-
-                        if white_px > 5:
-                            self.templates.append((f, tmpl_cropped, white_px))
-                            print(f" -> Geladen & signiert: {f} ({white_px} Px)")
+                        self.templates.append((f, tmpl_cropped))
+                        print(f" -> Geladen & einsatzbereit: {f}")
 
         if not self.templates:
             print("[DropWatcher] WARNUNG: Alle Bilder wurden durch deinen Filter ignoriert! Alarm nur auf Farbe.")
@@ -130,18 +131,12 @@ class DropWatcher:
         left_zone = sw * 0.35
         right_zone = sw * 0.65
 
-        is_mouse_left = pt.x < left_zone
-        is_match_left = match_x < left_zone
-        is_mouse_right = pt.x > right_zone
-        is_match_right = match_x > right_zone
-
-        if (is_mouse_left and is_match_left) or (is_mouse_right and is_match_right):
+        if (pt.x < left_zone and match_x < left_zone) or (pt.x > right_zone and match_x > right_zone):
             if abs(pt.x - match_x) < 450 and abs(pt.y - match_y) < 550:
                 return True
         return False
 
     def _instant_click(self, x, y, sw, sh):
-        """ESPORT-MODUS: Low-Level Hardware-Snap. 0ms Ausführung."""
         from ctypes import windll, Structure, c_long, byref, POINTER, c_ulong, sizeof, Union
         class MOUSEINPUT(Structure):
             _fields_ = [("dx", c_long), ("dy", c_long), ("mouseData", c_ulong), ("dwFlags", c_ulong), ("time", c_ulong),
@@ -157,13 +152,10 @@ class DropWatcher:
         ny = int(y * 65535 / sh)
 
         inputs = (INPUT * 3)()
-
         inputs[0].type = 0
         inputs[0].ii.mi = MOUSEINPUT(nx, ny, 0, 0x0001 | 0x8000, 0, None)
-
         inputs[1].type = 0
         inputs[1].ii.mi = MOUSEINPUT(nx, ny, 0, 0x0002 | 0x8000, 0, None)
-
         inputs[2].type = 0
         inputs[2].ii.mi = MOUSEINPUT(nx, ny, 0, 0x0004 | 0x8000, 0, None)
 
@@ -179,9 +171,7 @@ class DropWatcher:
         if not np.any(mask):
             return False, []
 
-        # LIVE-BINARISIERUNG: Alles was nicht Orange ist, wird gelöscht.
         screen_binary = (mask.astype(np.uint8) * 255)
-
         kernel = np.ones((5, 25), np.uint8)
         dilated = cv2.dilate(screen_binary, kernel, iterations=1)
         contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -189,52 +179,28 @@ class DropWatcher:
         rois = []
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
-            if w < 10 or h < 5:
-                continue
+            if w < 10 or h < 5: continue
 
             pad = 8
             y1 = max(0, y - pad)
             y2 = min(screen_binary.shape[0], y + h + pad)
             x1 = max(0, x - pad)
             x2 = min(screen_binary.shape[1], x + w + pad)
-
             rois.append((x1, y1, x2, y2))
 
-        if not rois:
-            return False, []
+        if not rois: return False, []
 
         found_items = []
         for (x1, y1, x2, y2) in rois:
             roi_img = screen_binary[y1:y2, x1:x2]
-
-            for name, tmpl_bin, tmpl_px in self.templates:
+            for name, tmpl_bin in self.templates:
                 th, tw = tmpl_bin.shape
-                if th > roi_img.shape[0] or tw > roi_img.shape[1]:
-                    continue
+                if th > roi_img.shape[0] or tw > roi_img.shape[1]: continue
 
-                # Vorab-Filter gesenkt, da die mathematische Schnittmenge ohnehin unbestechlich ist
                 res = cv2.matchTemplate(roi_img, tmpl_bin, cv2.TM_CCOEFF_NORMED)
-                loc = np.where(res >= 0.60)
+                loc = np.where(res >= 0.80)
 
                 for pt in zip(*loc[::-1]):
-                    # DOPPEL-CHECK (Die absolut unzerstörbare Pixel-Signatur-Prüfung)
-                    matched_area = roi_img[pt[1]:pt[1] + th, pt[0]:pt[0] + tw]
-                    area_px = cv2.countNonZero(matched_area)
-
-                    # 1. TEST: Gesamtanzahl der Pixel darf nicht massiv vom Original abweichen
-                    if abs(area_px - tmpl_px) > (tmpl_px * 0.20):
-                        continue
-
-                    # 2. TEST: Exakte Pixel-Überschneidung (Bitwise AND)
-                    intersection = cv2.bitwise_and(matched_area, tmpl_bin)
-                    overlap_px = cv2.countNonZero(intersection)
-
-                    # Wenn das Wort auf dem Bildschirm ein anderes ist (z.B. "Tal" statt "Jah"),
-                    # liegen die ersten Buchstaben logischerweise an anderen Stellen. Die Überschneidung
-                    # fällt sofort rapide ab und wird ignoriert.
-                    if overlap_px < (tmpl_px * 0.85):
-                        continue
-
                     center_x = x1 + pt[0] + tw // 2
                     center_y = y1 + pt[1] + th // 2
 
@@ -264,10 +230,8 @@ class DropWatcher:
 
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
-            # Etwas strenger gemacht, damit nicht jedes winzige Goldstück piept
             if w >= 20 and h >= 8:
                 return True, (x + w // 2, y + h // 2, "COLOR_MODE")
-
         return False, None
 
     def _trigger_alarm(self):
@@ -281,104 +245,107 @@ class DropWatcher:
 
     def _scan_loop(self):
         from ctypes import windll
-        user32 = windll.user32
-        sw = user32.GetSystemMetrics(0)
-        sh = user32.GetSystemMetrics(1)
+        sw = windll.user32.GetSystemMetrics(0)
+        sh = windll.user32.GetSystemMetrics(1)
+        char_center_x, char_center_y = sw / 2, sh / 2
 
-        char_center_x = sw / 2
-        char_center_y = sh / 2
+        monitor = {"top": int(sh * 0.15), "left": int(sw * 0.15), "width": int(sw * 0.70), "height": int(sh * 0.70)}
 
-        bbox = (int(sw * 0.15), int(sh * 0.15), int(sw * 0.85), int(sh * 0.85))
+        with mss.mss() as sct:
+            while not self.stop_event.is_set():
+                if self.active:
+                    try:
+                        now = time.time()
+                        auto_pickup_on = self.config.get("auto_pickup", False)
 
-        while not self.stop_event.is_set():
-            if self.active:
-                try:
-                    now = time.time()
-                    auto_pickup_on = self.config.get("auto_pickup", False)
+                        if not auto_pickup_on and (now - self.last_sound_time < self.cooldown):
+                            time.sleep(0.3)
+                            continue
 
-                    if not auto_pickup_on and (now - self.last_sound_time < self.cooldown):
-                        time.sleep(0.3)
-                        continue
+                        sct_img = sct.grab(monitor)
+                        screen_bgr = np.array(sct_img)[:, :, :3]
 
-                    pil_img = ImageGrab.grab(bbox=bbox)
-                    screen_np = np.array(pil_img)
-                    screen_bgr = cv2.cvtColor(screen_np, cv2.COLOR_RGB2BGR)
+                        found_match = False
+                        match_locs = []
 
-                    found_match = False
-                    match_locs = []
+                        if self.templates:
+                            found_match, match_locs = self._check_templates_multi(screen_bgr)
+                        else:
+                            found_match, single_loc = self._check_color_fallback(screen_bgr)
+                            if single_loc:
+                                match_locs.append(single_loc)
 
-                    if self.templates:
-                        found_match, match_locs = self._check_templates_multi(screen_bgr)
-                    else:
-                        found_match, single_loc = self._check_color_fallback(screen_bgr)
-                        if single_loc:
-                            match_locs.append(single_loc)
-
-                    if found_match and match_locs:
-
-                        if self.active_target_name and (now - self.last_click_time < 1.5):
-                            current_count = sum(1 for loc in match_locs if loc[2] == self.active_target_name)
-                            if current_count >= self.active_target_count:
-                                time.sleep(0.01)
-                                continue
-                            else:
-                                print(f"[DropWatcher] Rune aufgenommen! Nächstes Ziel erfassen...")
-                                self.active_target_name = None
-                                self.active_target_count = 0
-                                continue
-
-                        valid_targets = []
-                        for loc in match_locs:
-                            abs_x = bbox[0] + loc[0]
-                            abs_y = bbox[1] + loc[1]
-                            name = loc[2]
-
-                            is_safe = False
-                            if now - self.last_click_time < 1.5:
-                                is_safe = True
-                            elif not self._is_inventory_tooltip(abs_x, abs_y, sw, sh):
-                                is_safe = True
-
-                            if is_safe:
-                                dist = math.hypot(abs_x - char_center_x, abs_y - char_center_y)
-                                valid_targets.append((dist, abs_x, abs_y, name))
-
-                        if valid_targets:
-                            valid_targets.sort(key=lambda x: x[0])
-                            closest_dist, target_x, target_y, target_name = valid_targets[0]
-
-                            if now - self.last_sound_time >= self.cooldown:
-                                self._trigger_alarm()
-                                self.last_sound_time = now
-
-                            # SICHERHEITS-CHECK: Pickup wird NIEMALS bei "COLOR_MODE" ausgelöst!
-                            if auto_pickup_on and target_name != "COLOR_MODE":
-                                min_ms = self.config.get("pickup_delay_min", 150)
-                                max_ms = self.config.get("pickup_delay_max", 350)
-                                if max_ms < min_ms: max_ms = min_ms
-
-                                react_delay = random.uniform(min_ms, max_ms) / 1000.0
-                                if react_delay > 0:
-                                    time.sleep(react_delay)
-
-                                if max_ms <= 10:
-                                    self._instant_click(target_x, target_y, sw, sh)
+                        if found_match and match_locs:
+                            if self.active_target_name and (now - self.last_click_time < 1.5):
+                                current_count = sum(1 for loc in match_locs if loc[2] == self.active_target_name)
+                                if current_count >= self.active_target_count:
+                                    time.sleep(0.01)
+                                    continue
                                 else:
-                                    if HumanMouse:
-                                        hm = HumanMouse()
-                                        hm.move_to_humanized(target_x, target_y)
-                                        hm.human_click()
+                                    self.active_target_name = None
+                                    self.active_target_count = 0
+                                    continue
 
-                                self.last_click_time = time.time()
-                                self.active_target_name = target_name
-                                self.active_target_count = sum(1 for t in valid_targets if t[3] == target_name)
+                            valid_targets = []
+                            for loc in match_locs:
+                                abs_x = monitor["left"] + loc[0]
+                                abs_y = monitor["top"] + loc[1]
+                                name = loc[2]
 
-                                continue
+                                is_safe = False
+                                if now - self.last_click_time < 1.5:
+                                    is_safe = True
+                                elif not self._is_inventory_tooltip(abs_x, abs_y, sw, sh):
+                                    is_safe = True
 
-                    time.sleep(0.02 if auto_pickup_on else 0.3)
+                                if is_safe:
+                                    dist = math.hypot(abs_x - char_center_x, abs_y - char_center_y)
+                                    valid_targets.append((dist, abs_x, abs_y, name))
 
-                except Exception as e:
-                    print(f"Drop Watcher Error: {e}")
+                            if valid_targets:
+                                # --- NEU: Melde ALLE gefundenen Runen sofort an das Overlay ---
+                                if self.drop_callback:
+                                    for vt in valid_targets:
+                                        t_name = vt[3]
+                                        if t_name != "COLOR_MODE":
+                                            # Dateiendung abschneiden und schön formatieren (z.B. jah.png -> Jah)
+                                            clean_name = t_name.replace(".png", "").replace(".jpg", "").replace(".bmp",
+                                                                                                                "").title()
+                                            self.drop_callback(clean_name)
+
+                                # Pickup und Alarm immer für das Ziel ausführen, das am nächsten ist
+                                valid_targets.sort(key=lambda x: x[0])
+                                closest_dist, target_x, target_y, target_name = valid_targets[0]
+
+                                if now - self.last_sound_time >= self.cooldown:
+                                    self._trigger_alarm()
+                                    self.last_sound_time = now
+
+                                if auto_pickup_on and target_name != "COLOR_MODE":
+                                    min_ms = self.config.get("pickup_delay_min", 150)
+                                    max_ms = self.config.get("pickup_delay_max", 350)
+                                    if max_ms < min_ms: max_ms = min_ms
+
+                                    react_delay = random.uniform(min_ms, max_ms) / 1000.0
+                                    if react_delay > 0: time.sleep(react_delay)
+
+                                    if max_ms <= 10:
+                                        self._instant_click(target_x, target_y, sw, sh)
+                                    else:
+                                        if HumanMouse:
+                                            hm = HumanMouse()
+                                            hm.move_to_humanized(target_x, target_y)
+                                            hm.human_click()
+
+                                    self.last_click_time = time.time()
+                                    self.active_target_name = target_name
+                                    self.active_target_count = sum(1 for t in valid_targets if t[3] == target_name)
+                                    continue
+
+                        time.sleep(0.01 if auto_pickup_on else 0.3)
+
+                    except Exception as e:
+                        print(f"Drop Watcher Error: {e}")
+                        time.sleep(1)
+                else:
                     time.sleep(1)
-            else:
-                time.sleep(1)
