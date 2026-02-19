@@ -73,7 +73,9 @@ class TrackerConfig:
                         "hp_key": "Aus", "mana_key": "Aus", "merc_key": "Aus",
                         "hp_sound": True, "mana_sound": False, "merc_sound": True, "drop_sound": True,
                         "width": 360, "height": 260, "alpha": 1.0,
-                        "drop_alert_active": False, "xp_active": False,
+                        "drop_alert_active": False, "auto_pickup": False,
+                        "pickup_delay_min": 150, "pickup_delay_max": 350,
+                        "xp_active": False,
                         "min_rune": "Pul", "clickthrough": False
                     }
                     for k, v in defaults.items():
@@ -85,7 +87,9 @@ class TrackerConfig:
             "alpha": 1.0, "hp_key": "Aus", "mana_key": "Aus", "merc_key": "Aus",
             "hp_delay": "0.8", "mana_delay": "0.8", "merc_delay": "0.8",
             "hp_sound": True, "mana_sound": False, "merc_sound": True, "drop_sound": True,
-            "width": 360, "height": 260, "drop_alert_active": False, "xp_active": False,
+            "width": 360, "height": 260, "drop_alert_active": False, "auto_pickup": False,
+            "pickup_delay_min": 150, "pickup_delay_max": 350,
+            "xp_active": False,
             "min_rune": "Pul", "clickthrough": False
         }
 
