@@ -16,6 +16,7 @@ import d2r_unlocker
 import d2r_input
 from d2r_tutorial import TutorialAssistant
 from d2r_runewords import RunewordConfigurator
+from d2r_tracker import TrackerConfigurator  # NEU: Import des Trackers
 
 # --- CONFIG & KONSTANTEN ---
 CONFIG_FILE = "d2r_accounts.json"
@@ -64,11 +65,14 @@ class D2RManager(ctk.CTk):
         self.tabview = ctk.CTkTabview(self)
         self.tabview.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
+        # Tabs definieren
         self.tab_accounts = self.tabview.add("Accounts & Start")
         self.tab_runewords = self.tabview.add("Runenwort Konfigurator")
+        self.tab_tracker = self.tabview.add("Run Tracker & Overlay")  # NEU
 
         self.create_widgets()
         self.create_runeword_tab()
+        self.create_tracker_tab()  # NEU
 
         self.overlay = None
         self.blocker = None
@@ -109,6 +113,11 @@ class D2RManager(ctk.CTk):
     def create_runeword_tab(self):
         self.rw_tool = RunewordConfigurator(self.tab_runewords)
         self.rw_tool.pack(fill="both", expand=True)
+
+    def create_tracker_tab(self):
+        # NEU: Initialisierung des Tracker Tabs
+        self.tracker_tool = TrackerConfigurator(self.tab_tracker, self)
+        self.tracker_tool.pack(fill="both", expand=True)
 
     def create_widgets(self):
         # Wir nutzen den ursprünglichen main_frame jetzt innerhalb des Tabs
@@ -248,8 +257,8 @@ class D2RManager(ctk.CTk):
                 "pos": "top"
             },
             {
-                "title": "6. NEU: Runenwörter",
-                "text": "Oben im zweiten Tab findest du nun den Runenwort-Konfigurator für deine Runs!",
+                "title": "6. Runenwörter & Tracker",
+                "text": "Oben in den Tabs findest du nun den Runenwort-Konfigurator UND den neuen Run-Tracker mit Overlay!",
                 "target": self.tabview,
                 "pos": "bottom"
             }
