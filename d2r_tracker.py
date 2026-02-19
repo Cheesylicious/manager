@@ -44,7 +44,8 @@ class TrackerConfig:
                         "hp_key": "Aus", "mana_key": "Aus", "merc_key": "Aus",
                         "hp_sound": True, "mana_sound": False, "merc_sound": True, "drop_sound": True,
                         "width": 360, "height": 260, "alpha": 1.0,
-                        "drop_alert_active": False, "xp_active": False
+                        "drop_alert_active": False, "xp_active": False,
+                        "min_rune": "Pul"  # Standardwert für High Rune Alarm
                     }
                     for k, v in defaults.items():
                         if k not in data: data[k] = v
@@ -55,7 +56,8 @@ class TrackerConfig:
             "alpha": 1.0, "hp_key": "Aus", "mana_key": "Aus", "merc_key": "Aus",
             "hp_delay": "0.8", "mana_delay": "0.8", "merc_delay": "0.8",
             "hp_sound": True, "mana_sound": False, "merc_sound": True, "drop_sound": True,
-            "width": 360, "height": 260, "drop_alert_active": False, "xp_active": False
+            "width": 360, "height": 260, "drop_alert_active": False, "xp_active": False,
+            "min_rune": "Pul"
         }
 
     @staticmethod
@@ -280,7 +282,8 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         return f"{t[0]}{dot}:{k}"
 
     def change_alpha(self, v):
-        self.attributes('-alpha', v); self.config_data["alpha"] = v
+        self.attributes('-alpha', v);
+        self.config_data["alpha"] = v
 
     def start_move(self, e):
         self.x, self.y = e.x, e.y
@@ -292,13 +295,17 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.context_menu.tk_popup(e.x_root, e.y_root)
 
     def toggle_pause(self):
-        self.paused = not self.paused; self.lbl_status.configure(text="⏸️ PAUSED" if self.paused else "WAITING...")
+        self.paused = not self.paused;
+        self.lbl_status.configure(text="⏸️ PAUSED" if self.paused else "WAITING...")
 
     def toggle_mute(self):
-        self.alarm_active = not self.alarm_active; self.btn_mute.configure(text="🔊" if self.alarm_active else "🔇")
+        self.alarm_active = not self.alarm_active;
+        self.btn_mute.configure(text="🔊" if self.alarm_active else "🔇")
 
     def reset_current_run(self):
-        self.start_time = 0; self.in_game = False; self.lbl_timer.configure(text="00:00.00")
+        self.start_time = 0;
+        self.in_game = False;
+        self.lbl_timer.configure(text="00:00.00")
 
     def reset_session(self):
         self.run_history, self.run_count = [], 0
@@ -313,13 +320,14 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
     def resize_move(self, e):
         nw, nh = max(200, min(500, self.rs_w + (e.x_root - self.rs_x))), max(150, min(400, self.rs_h + (
-                    e.y_root - self.rs_y)))
+                e.y_root - self.rs_y)))
         self.geometry(f"{nw}x{nh}");
         self.current_width, self.current_height = nw, nh
         self.lbl_timer.configure(font=("Roboto Mono", int(nw * 0.11), "bold"))
 
     def resize_end(self, e):
-        self.config_data.update({"width": self.current_width, "height": self.current_height}); TrackerConfig.save(
+        self.config_data.update({"width": self.current_width, "height": self.current_height});
+        TrackerConfig.save(
             self.config_data)
 
     def toggle_history(self, event=None):
@@ -329,7 +337,8 @@ class RunTrackerOverlay(ctk.CTkToplevel):
             self.history_frame.pack(fill="both", expand=True, padx=5, pady=(0, 10), before=self.guardian_frame);
             self.update_history_list()
         else:
-            self.geometry(f"{self.current_width}x{self.current_height}"); self.history_frame.pack_forget()
+            self.geometry(f"{self.current_width}x{self.current_height}");
+            self.history_frame.pack_forget()
 
     def update_history_list(self):
         for w in self.history_frame.winfo_children(): w.destroy()
@@ -455,6 +464,14 @@ class TrackerConfigurator(ctk.CTkFrame):
     def __init__(self, parent, main_app_ref):
         super().__init__(parent)
         self.app, self.overlay, self.config_data = main_app_ref, None, TrackerConfig.load()
+
+        # Liste aller Runen für das Dropdown
+        self.rune_names = [
+            "El", "Eld", "Tir", "Nef", "Eth", "Ith", "Tal", "Ral", "Ort", "Thul", "Amn", "Sol", "Shael", "Dol", "Hel",
+            "Io", "Lum", "Ko", "Fal", "Lem", "Pul", "Um", "Mal", "Ist", "Gul", "Vex", "Ohm", "Lo", "Sur", "Ber",
+            "Jah", "Cham", "Zod"
+        ]
+
         self.create_widgets()
 
     def create_widgets(self):
@@ -463,6 +480,8 @@ class TrackerConfigurator(ctk.CTkFrame):
         info.pack(fill="x", padx=20, pady=20)
         ctk.CTkLabel(info, text="ULTIMATE TRACKER & GUARDIAN", font=("Roboto", 20, "bold"), text_color="#FFD700").pack(
             anchor="w")
+
+        # Potions Config
         conf = ctk.CTkFrame(self, border_width=1, border_color="#333");
         conf.pack(fill="x", padx=20, pady=10)
         p = ctk.CTkFrame(conf, fg_color="transparent");
@@ -480,11 +499,23 @@ class TrackerConfigurator(ctk.CTkFrame):
             ctk.CTkCheckBox(p, text="🔔", variable=cb, width=20,
                             command=lambda k=k, var=cb: self.save_conf(f"{k}_sound", var.get())).grid(row=i, column=3)
 
+        # Drop & XP Config
         d_frame = ctk.CTkFrame(conf, fg_color="transparent");
-        d_frame.pack(fill="x", padx=20, pady=5)
+        d_frame.pack(fill="x", padx=20, pady=10)
+
+        # High Rune Alarm Checkbox
         self.drop_var = ctk.BooleanVar(value=self.config_data.get("drop_alert_active", False))
-        ctk.CTkCheckBox(d_frame, text="🔸 High Rune Alarm", variable=self.drop_var, command=self.save_drop,
-                        text_color="#FFD700").pack(side="left")
+        ctk.CTkCheckBox(d_frame, text="🔸 High Rune Alarm ab:", variable=self.drop_var, command=self.save_drop,
+                        text_color="#FFD700").pack(side="left", padx=(0, 5))
+
+        # NEU: Dropdown für Rune Level
+        current_rune = self.config_data.get("min_rune", "Pul")
+        self.rune_combo = ctk.CTkOptionMenu(d_frame, values=self.rune_names, width=70,
+                                            command=self.save_rune_choice)
+        self.rune_combo.set(current_rune)
+        self.rune_combo.pack(side="left")
+
+        # XP Tracker Checkbox
         self.xp_var = ctk.BooleanVar(value=self.config_data.get("xp_active", False))
         ctk.CTkCheckBox(d_frame, text="📈 XP Tracker", variable=self.xp_var, command=self.save_xp,
                         text_color="#00ccff").pack(side="left", padx=20)
@@ -499,19 +530,27 @@ class TrackerConfigurator(ctk.CTkFrame):
         self.after(500, self.live_check)
 
     def save_conf(self, k, v):
-        self.config_data[k] = v; TrackerConfig.save(self.config_data)
+        self.config_data[k] = v;
+        TrackerConfig.save(self.config_data)
 
     def save_drop(self):
-        self.config_data["drop_alert_active"] = self.drop_var.get(); TrackerConfig.save(self.config_data)
+        self.config_data["drop_alert_active"] = self.drop_var.get();
+        TrackerConfig.save(self.config_data)
+
+    def save_rune_choice(self, choice):
+        self.config_data["min_rune"] = choice;
+        TrackerConfig.save(self.config_data)
 
     def save_xp(self):
-        self.config_data["xp_active"] = self.xp_var.get(); TrackerConfig.save(self.config_data)
+        self.config_data["xp_active"] = self.xp_var.get();
+        TrackerConfig.save(self.config_data)
 
     def start_wizard(self):
         MultiCalibrationOverlay(self.app, self.on_calib_done)
 
     def on_calib_done(self, res):
-        self.config_data.update(res); TrackerConfig.save(self.config_data)
+        self.config_data.update(res);
+        TrackerConfig.save(self.config_data)
 
     def live_check(self):
         if not self.winfo_exists(): return
@@ -524,9 +563,13 @@ class TrackerConfigurator(ctk.CTkFrame):
 
     def toggle(self):
         if self.overlay:
-            self.overlay.stop_tracking(); self.overlay = None; self.btn_start.configure(text="▶ START OVERLAY",
-                                                                                        fg_color="#2da44e")
+            self.overlay.stop_tracking();
+            self.overlay = None;
+            self.btn_start.configure(text="▶ START OVERLAY",
+                                     fg_color="#2da44e")
         else:
             self.overlay = RunTrackerOverlay(self.app,
-                                             self.config_data); self.overlay.start_tracking(); self.btn_start.configure(
+                                             self.config_data);
+            self.overlay.start_tracking();
+            self.btn_start.configure(
                 text="⏹ STOP", fg_color="#cf222e")

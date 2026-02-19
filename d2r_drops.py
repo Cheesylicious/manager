@@ -2,7 +2,15 @@ import time
 import threading
 import math
 import winsound
+import os
+import sys
+import cv2
+import numpy as np
 from PIL import ImageGrab
+
+# --- CONFIG ---
+# Ordnername für die Referenzbilder
+TEMPLATE_FOLDER = "runes_filter"
 
 
 class DropWatcher:
@@ -10,15 +18,46 @@ class DropWatcher:
         self.running = False
         self.thread = None
         self.stop_event = threading.Event()
+        self.config = config_data
 
-        # Einstellungen
         self.active = config_data.get("drop_alert_active", False)
+        # Cooldown verhindert Spam beim gleichen Drop
         self.last_alert = 0
-        self.cooldown = 4.0  # Sekunden Ruhe zwischen Alarmen
+        self.cooldown = 3.0
 
-        # Farbeinstellungen für High Runes (Orange/Gold)
-        # Typisches D2R Orange: R=190-255, G=130-180, B=20-60
-        self.min_rgb = (150, 90, 0)
+        # Templates laden
+        self.templates = []
+        self._load_templates()
+
+    def _load_templates(self):
+        """Lädt alle Bilder aus dem runes_filter Ordner in den RAM."""
+        self.templates = []
+
+        # Pfad finden (auch in der EXE oder Dev-Umgebung)
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        folder_path = os.path.join(base_path, TEMPLATE_FOLDER)
+
+        if not os.path.exists(folder_path):
+            # Erstelle Ordner, falls er fehlt, damit der User weiß, wo die Bilder hinmüssen
+            try:
+                os.makedirs(folder_path)
+                print(f"[DropWatcher] Ordner '{TEMPLATE_FOLDER}' erstellt. Bitte Bilder hier ablegen!")
+            except:
+                pass
+            return
+
+        print(f"[DropWatcher] Lade Filter-Bilder aus '{folder_path}'...")
+        for f in os.listdir(folder_path):
+            if f.lower().endswith(('.png', '.jpg', '.bmp')):
+                full_path = os.path.join(folder_path, f)
+                # cv2.imread lädt Bilder als BGR
+                tmpl = cv2.imread(full_path)
+                if tmpl is not None:
+                    self.templates.append((f, tmpl))
+                    print(f" -> Geladen: {f}")
+
+        if not self.templates:
+            print("[DropWatcher] WARNUNG: Keine Referenzbilder gefunden! Alarm nur auf Farbe.")
 
     def update_config(self, is_active):
         self.active = is_active
@@ -29,6 +68,8 @@ class DropWatcher:
 
     def start(self):
         if self.active and not self.running:
+            # Templates neu laden beim Start (falls User neue Bilder hinzugefügt hat)
+            self._load_templates()
             self.running = True
             self.stop_event.clear()
             self.thread = threading.Thread(target=self._scan_loop, daemon=True)
@@ -38,66 +79,96 @@ class DropWatcher:
         self.running = False
         self.stop_event.set()
 
-    def _is_rune_color(self, r, g, b):
-        # 1. Muss hell genug sein
-        if r < 160: return False
-
-        # 2. Rot muss dominant sein, Grün mittel, Blau wenig
+    def _is_orange_pixel(self, r, g, b):
+        """Schneller Vorab-Check auf Orange/Gold Pixel"""
+        if r < 140: return False
         if not (r > g > b): return False
-
-        # 3. Verhältnis Rot zu Grün (Orange-Bereich)
-        # Zu viel Grün = Gelb (Rare Item), Zu wenig Grün = Rot (Health/Feuer)
-        rg_diff = r - g
-        if not (30 < rg_diff < 100): return False
-
-        # 4. Wenig Blau (Sättigung)
-        if b > 100: return False
-
+        # D2R Rune Orange Spektrum
+        if not (20 < (r - g) < 120): return False
         return True
 
     def _scan_loop(self):
-        # Wir scannen nur die Mitte des Bildschirms (Performance & Relevanz)
         from ctypes import windll
         user32 = windll.user32
         sw = user32.GetSystemMetrics(0)
         sh = user32.GetSystemMetrics(1)
 
-        # Bereich: 20% Rand oben/unten/links/rechts ignorieren
-        bbox = (int(sw * 0.2), int(sh * 0.2), int(sw * 0.8), int(sh * 0.8))
-        step = 12  # Wir prüfen nur jeden 12. Pixel (schneller)
+        # Scan-Bereich (Mitte, ignoriert Ränder für Performance)
+        bbox = (int(sw * 0.15), int(sh * 0.15), int(sw * 0.85), int(sh * 0.85))
 
         while not self.stop_event.is_set():
             if self.active:
                 try:
                     now = time.time()
                     if now - self.last_alert > self.cooldown:
-                        image = ImageGrab.grab(bbox=bbox)
-                        width, height = image.size
-                        pixels = image.load()
 
-                        found = 0
-                        # Scan
-                        for y in range(0, height, step):
-                            for x in range(0, width, step):
-                                r, g, b = pixels[x, y]
-                                if self._is_rune_color(r, g, b):
-                                    found += 1
-                                    # Wenn wir Cluster finden, Alarm!
-                                    if found >= 2:
-                                        self._trigger_alarm()
-                                        break
-                            if found >= 2: break
+                        # 1. Screenshot machen
+                        pil_img = ImageGrab.grab(bbox=bbox)
+                        # Umwandlung für OpenCV (RGB -> BGR)
+                        screen_np = np.array(pil_img)
+                        screen_bgr = cv2.cvtColor(screen_np, cv2.COLOR_RGB2BGR)
 
-                    time.sleep(0.3)  # 3x pro Sekunde reicht
-                except:
+                        found_match = False
+
+                        # A) Wenn wir Templates haben: Präziser Abgleich
+                        if self.templates:
+                            found_match = self._check_templates(screen_bgr)
+
+                        # B) Fallback: Wenn KEINE Templates da sind, nimm "dumme" Farberkennung
+                        # (Damit der User wenigstens irgendeinen Alarm bekommt)
+                        else:
+                            found_match = self._check_color_fallback(pil_img)
+
+                        if found_match:
+                            self._trigger_alarm()
+
+                    time.sleep(0.3)  # 3-4x pro Sekunde reicht völlig
+                except Exception as e:
+                    print(f"Drop Watcher Error: {e}")
                     time.sleep(1)
             else:
                 time.sleep(1)
 
+    def _check_templates(self, screen_img):
+        """Prüft das Bild gegen alle geladenen Templates (High Runes)"""
+        best_val = 0
+        best_name = ""
+
+        for name, tmpl in self.templates:
+            # Match Template
+            # TM_CCOEFF_NORMED liefert Werte zwischen -1 und 1 (1 = Perfekt)
+            res = cv2.matchTemplate(screen_img, tmpl, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+
+            # Schwellenwert 0.9 = 90% Übereinstimmung (sehr sicher)
+            if max_val > 0.90:
+                print(f"[DropWatcher] TREFFER: {name} ({round(max_val * 100, 1)}%)")
+                return True
+
+        return False
+
+    def _check_color_fallback(self, pil_img):
+        """Nur Farbe prüfen (wenn Ordner leer ist)"""
+        # Schneller Pixel-Scan (Stride 20)
+        pixels = pil_img.load()
+        w, h = pil_img.size
+        for y in range(0, h, 20):
+            for x in range(0, w, 20):
+                r, g, b = pixels[x, y]
+                if self._is_orange_pixel(r, g, b):
+                    # Kurzer Cluster-Check gegen Rauschen
+                    count = 0
+                    for k in range(1, 5):
+                        if x + k < w and self._is_orange_pixel(*pixels[x + k, y]): count += 1
+
+                    if count >= 2:
+                        print("[DropWatcher] Unbekanntes oranges Item gefunden (Color-Mode)")
+                        return True
+        return False
+
     def _trigger_alarm(self):
         self.last_alert = time.time()
-        # Doppel-Ping Sound
-        winsound.Beep(1800, 100)
-        time.sleep(0.05)
-        winsound.Beep(2200, 150)
-        print("DROP ALARM!")
+        # Spezieller Sound für High Rune
+        winsound.Beep(1500, 80)
+        winsound.Beep(1500, 80)
+        winsound.Beep(2500, 300)
