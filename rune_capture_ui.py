@@ -35,7 +35,7 @@ class RuneCaptureWindow(ctk.CTkToplevel):
         desc = ("1. Wähle unten die Rune aus, die du aufnehmen möchtest.\n"
                 "2. Wirf die Rune im Spiel auf den Boden.\n"
                 "3. Klicke auf Start und bewege die Maus DANEBEN (nicht darauf!).\n"
-                "4. Nach 5 Sekunden wird die Rune automatisch gespeichert.")
+                "4. Das Tool erkennt den Namen und schneidet '-Rune' automatisch ab.")
         ctk.CTkLabel(self, text=desc, font=("Roboto", 12), text_color="#dddddd", justify="left").pack(pady=10, padx=20)
 
         self.rune_combo = ctk.CTkOptionMenu(self, values=self.all_runes, width=150)
@@ -78,11 +78,9 @@ class RuneCaptureWindow(ctk.CTkToplevel):
             x2 = min(sw, mx + box_size)
             y2 = min(sh, my + box_size)
 
-            # ULTRASCHNELLER MSS-SCAN
             with mss.mss() as sct:
                 monitor = {"top": y1, "left": x1, "width": x2 - x1, "height": y2 - y1}
                 sct_img = sct.grab(monitor)
-                # BGRA zu BGR für OpenCV konvertieren
                 screen_bgr = np.array(sct_img)[:, :, :3]
 
             b = screen_bgr[:, :, 0].astype(np.int16)
@@ -124,16 +122,34 @@ class RuneCaptureWindow(ctk.CTkToplevel):
                 return
 
             bx, by, bw, bh = best_rect
+
+            # --- INNOVATION: Automatisches Entfernen von "-Rune" ---
+            # Wir analysieren die Maske innerhalb des gefundenen Rechtecks
+            tag_mask = mask_uint8[by:by + bh, bx:bx + bw]
+            inner_contours, _ = cv2.findContours(tag_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Sortieren von links nach rechts
+            inner_contours = sorted(inner_contours, key=lambda c: cv2.boundingRect(c)[0])
+
+            split_x = bw  # Standardmäßig volle Breite
+            for cnt_in in inner_contours:
+                ix, iy, iw, ih = cv2.boundingRect(cnt_in)
+                # D2R Bindestrich-Logik: Er ist flach (iw > ih) und trennt Name von Suffix
+                if iw > ih * 1.2 and ix > bw * 0.2:
+                    split_x = ix - 3  # Schnittpunkt 3 Pixel vor dem Bindestrich
+                    break
+
             pad = 5
             crop_y1 = max(0, by - pad)
             crop_y2 = min(screen_bgr.shape[0], by + bh + pad)
             crop_x1 = max(0, bx - pad)
-            crop_x2 = min(screen_bgr.shape[1], bx + bw + pad)
+            # Nutze den berechneten split_x für den Crop
+            crop_x2 = min(screen_bgr.shape[1], bx + split_x)
 
             final_img = screen_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
-            rune_name = self.rune_combo.get().lower()
 
-            # DYNAMISCHE PFAD-LOGIK (.EXE KOMPATIBEL)
+            # Dateinamen-Bereinigung (Falls im Dropdown "-Rune" stehen sollte)
+            rune_name = self.rune_combo.get().replace("-Rune", "").replace("-rune", "").strip().lower()
+
             if getattr(sys, 'frozen', False):
                 base_path = os.path.dirname(sys.executable)
             else:

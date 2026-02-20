@@ -8,6 +8,35 @@ import cv2
 import numpy as np
 import math
 import mss
+from inventory_verifier import InventoryVerifier
+
+
+def log_debug(msg):
+    try:
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+
+        log_file = os.path.join(base_path, "scanner_debug.txt")
+        timestamp = time.strftime('%H:%M:%S')
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {msg}\n")
+    except:
+        pass
+
+
+log_debug("--- NEUER PROGRAMMSTART ---")
+
+try:
+    from rune_snipping_tool import RuneSnippingTool
+    from snipping_prompt import SnippingPrompt
+
+    log_debug("Snipping Tools erfolgreich importiert!")
+except ImportError as e:
+    RuneSnippingTool = None
+    SnippingPrompt = None
+    log_debug(f"FEHLER: Konnte Snipping Tools nicht laden: {e}")
 
 try:
     from human_input import HumanMouse
@@ -18,30 +47,38 @@ TEMPLATE_FOLDER = "runes_filter"
 
 
 class DropWatcher:
-    # NEU: drop_callback Parameter hinzugefügt
-    def __init__(self, config_data, drop_callback=None):
+    def __init__(self, config_data, drop_callback=None, ui_parent=None):
         self.running = False
         self.thread = None
         self.stop_event = threading.Event()
         self.config = config_data
         self.drop_callback = drop_callback
+        self.ui_parent = ui_parent
 
+        self.inv_verifier = InventoryVerifier()
         self.active = config_data.get("drop_alert_active", False)
 
         self.last_sound_time = 0
+        self.last_ground_log = 0
         self.cooldown = 3.0
 
         self.last_click_time = 0
         self.active_target_name = None
         self.active_target_count = 0
 
+        self.tracked_items = {}
+        self.pending_items = []
+
+        self.active_prompt = None
+        self.prompt_active_for_rune = None
+
         self.templates = []
         self._load_templates()
 
     def _load_templates(self):
+        """Lädt Templates und bereinigt Namen von Suffixen wie '-Rune'."""
         self.templates = []
 
-        # Dynamische Pfad-Logik für EXE-Kompatibilität
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
@@ -56,31 +93,24 @@ class DropWatcher:
                 pass
             return
 
-        print(f"[DropWatcher] Lade Filter-Bilder aus '{folder_path}'...")
+        log_debug(f"Lade Filter-Bilder aus '{folder_path}'...")
 
         allowed_runes = self.config.get("allowed_runes", [])
-        allowed_lower = [r.lower() for r in allowed_runes]
+        # Wir bereinigen auch die Config-Einträge für den Vergleich
+        allowed_clean = [r.lower().replace("-rune", "").strip() for r in allowed_runes]
 
         for f in os.listdir(folder_path):
             if f.lower().endswith(('.png', '.jpg', '.bmp')):
                 fname_lower = f.lower()
-                clean_name = fname_lower.replace('-', ' ').replace('_', ' ').replace('.', ' ')
-                words = clean_name.split()
+                # Namen radikal bereinigen: Dateiendung weg, "-rune" weg
+                clean_name = fname_lower.split('.')[0].replace("-rune", "").replace("_rune", "").strip()
 
-                is_allowed = False
-                for r in allowed_lower:
-                    if r in words:
-                        is_allowed = True
-                        break
-
-                if not is_allowed:
-                    print(f" -> Ignoriert (Nicht im Filter markiert): {f}")
+                if clean_name not in allowed_clean:
                     continue
 
                 full_path = os.path.join(folder_path, f)
                 tmpl = cv2.imread(full_path)
                 if tmpl is not None:
-
                     # Orange Schrift isolieren
                     b = tmpl[:, :, 0].astype(np.int16)
                     g = tmpl[:, :, 1].astype(np.int16)
@@ -89,17 +119,12 @@ class DropWatcher:
 
                     tmpl_binary = (mask.astype(np.uint8) * 255)
 
-                    # Exakt auf die weisse Schrift zuschneiden
                     contours, _ = cv2.findContours(tmpl_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     if contours:
                         x, y, w, h = cv2.boundingRect(np.vstack(contours))
                         tmpl_cropped = tmpl_binary[y:y + h, x:x + w]
-
-                        self.templates.append((f, tmpl_cropped))
-                        print(f" -> Geladen & einsatzbereit: {f}")
-
-        if not self.templates:
-            print("[DropWatcher] WARNUNG: Alle Bilder wurden durch deinen Filter ignoriert! Alarm nur auf Farbe.")
+                        # Wir speichern das Template mit dem sauberen Kurznamen (z.B. "Tal")
+                        self.templates.append((clean_name.title(), tmpl_cropped))
 
     def update_config(self, is_active):
         self.active = is_active
@@ -211,7 +236,7 @@ class DropWatcher:
                             break
 
                     if not is_duplicate:
-                        found_items.append((center_x, center_y, name))
+                        found_items.append((center_x, center_y, name, tmpl_bin))
 
         return len(found_items) > 0, found_items
 
@@ -231,7 +256,7 @@ class DropWatcher:
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
             if w >= 20 and h >= 8:
-                return True, (x + w // 2, y + h // 2, "COLOR_MODE")
+                return True, (x + w // 2, y + h // 2, "COLOR_MODE", None)
         return False, None
 
     def _trigger_alarm(self):
@@ -243,6 +268,53 @@ class DropWatcher:
 
         threading.Thread(target=sound_worker, daemon=True).start()
 
+    def _open_snipping_prompt(self, rune_name):
+        if self.ui_parent:
+            log_debug(f"_open_snipping_prompt aufgerufen für {rune_name}")
+            self.ui_parent.after(0, lambda: self._create_prompt_instance(rune_name))
+
+    def _create_prompt_instance(self, rune_name):
+        if self.active_prompt is None or not self.active_prompt.winfo_exists():
+            log_debug(f"Zeige Nachfrage-Popup für: {rune_name}")
+            self.prompt_active_for_rune = rune_name
+
+            def on_yes(name):
+                log_debug(f"Nutzer hat JA geklickt für {name}. Starte Vollbild-Tool...")
+                self.active_prompt = None
+                self.prompt_active_for_rune = None
+                self.pending_items = [i for i in self.pending_items if i['name'] != name]
+                self._open_snipping_tool(name)
+
+            def on_no(name):
+                log_debug(f"Nutzer hat NEIN geklickt. Breche ab für {name}.")
+                self.active_prompt = None
+                self.prompt_active_for_rune = None
+                self.pending_items = [i for i in self.pending_items if i['name'] != name]
+
+            self.active_prompt = SnippingPrompt(
+                parent=self.ui_parent,
+                rune_name=rune_name,
+                on_yes_callback=on_yes,
+                on_no_callback=on_no
+            )
+
+    def _open_snipping_tool(self, rune_name):
+        if self.ui_parent:
+            self.ui_parent.after(0, lambda: self._create_snipping_instance(rune_name))
+
+    def _create_snipping_instance(self, rune_name):
+        def on_success(learned_name):
+            log_debug(f"Snipping-Erfolg: {learned_name} wurde gelernt.")
+            if self.drop_callback:
+                self.drop_callback(learned_name)
+
+        RuneSnippingTool(
+            parent=self.ui_parent,
+            rune_name=rune_name,
+            folder_path=self.inv_verifier.icon_folder,
+            success_callback=on_success
+        )
+
     def _scan_loop(self):
         from ctypes import windll
         sw = windll.user32.GetSystemMetrics(0)
@@ -250,6 +322,7 @@ class DropWatcher:
         char_center_x, char_center_y = sw / 2, sh / 2
 
         monitor = {"top": int(sh * 0.15), "left": int(sw * 0.15), "width": int(sw * 0.70), "height": int(sh * 0.70)}
+        log_debug(f"Scan-Loop gestartet. Monitor: {sw}x{sh}")
 
         with mss.mss() as sct:
             while not self.stop_event.is_set():
@@ -257,10 +330,6 @@ class DropWatcher:
                     try:
                         now = time.time()
                         auto_pickup_on = self.config.get("auto_pickup", False)
-
-                        if not auto_pickup_on and (now - self.last_sound_time < self.cooldown):
-                            time.sleep(0.3)
-                            continue
 
                         sct_img = sct.grab(monitor)
                         screen_bgr = np.array(sct_img)[:, :, :3]
@@ -275,77 +344,138 @@ class DropWatcher:
                             if single_loc:
                                 match_locs.append(single_loc)
 
+                        current_scan_items = {}
                         if found_match and match_locs:
-                            if self.active_target_name and (now - self.last_click_time < 1.5):
-                                current_count = sum(1 for loc in match_locs if loc[2] == self.active_target_name)
-                                if current_count >= self.active_target_count:
-                                    time.sleep(0.01)
-                                    continue
-                                else:
-                                    self.active_target_name = None
-                                    self.active_target_count = 0
+                            for loc in match_locs:
+                                abs_x = monitor["left"] + loc[0]
+                                abs_y = monitor["top"] + loc[1]
+
+                                if self._is_inventory_tooltip(abs_x, abs_y, sw, sh):
                                     continue
 
+                                name = loc[2]
+                                tmpl_bin = loc[3]
+                                current_scan_items[(abs_x, abs_y)] = (name, tmpl_bin)
+
+                                if now - self.last_ground_log >= 2.0:
+                                    log_debug(f"RUNE AM BODEN GESEHEN: {name}")
+                                    self.last_ground_log = now
+
+                            if current_scan_items and (now - self.last_sound_time >= self.cooldown):
+                                self._trigger_alarm()
+                                self.last_sound_time = now
+
+                        # --- PICKUP VERIFIKATION ---
+                        for (old_x, old_y), (name, tmpl_bin) in self.tracked_items.items():
+                            is_still_there = False
+                            for (new_x, new_y), (new_name, _) in current_scan_items.items():
+                                if name == new_name and math.hypot(old_x - new_x, old_y - new_y) < 50:
+                                    is_still_there = True
+                                    break
+
+                            if not is_still_there:
+                                dist_to_char = math.hypot(old_x - char_center_x, old_y - char_center_y)
+
+                                if dist_to_char < 400:
+                                    if name != "COLOR_MODE":
+                                        # INNOVATION: Suffix-Bereinigung bei Pickup (z.B. "Tal-Rune" -> "Tal")
+                                        clean_name = name.replace("-Rune", "").replace("_Rune", "").replace(".png",
+                                                                                                            "").replace(
+                                            ".jpg", "").strip().title()
+
+                                        is_already_pending = any(p['name'] == clean_name for p in self.pending_items)
+                                        if not is_already_pending:
+                                            self.pending_items.append({
+                                                'name': clean_name,
+                                                'tmpl': tmpl_bin,
+                                                'time': now,
+                                                'inv_timer': None
+                                            })
+
+                                            self.inv_verifier.update_baseline(force_reset_item=clean_name)
+
+                                            winsound.Beep(400, 150)
+                                            log_debug(
+                                                f"Rune verschwunden! '{clean_name}' in die Warteliste aufgenommen.")
+
+                        self.tracked_items = current_scan_items.copy()
+
+                        # --- INVENTAR-CHECK & BASELINE LOGIK ---
+                        inv_open = self.inv_verifier.is_inventory_open()
+
+                        if inv_open and not self.pending_items:
+                            self.inv_verifier.update_baseline()
+
+                        elif inv_open and self.pending_items:
+                            for p_item in list(self.pending_items):
+                                rune_name = p_item['name']
+
+                                if self.inv_verifier.verify_item_in_inventory(rune_name):
+                                    log_debug(f"Bekanntes Icon '{rune_name}' im Inventar bestaetigt.")
+                                    if self.drop_callback:
+                                        self.drop_callback(rune_name)
+                                    self.pending_items.remove(p_item)
+                                    continue
+
+                                if p_item['inv_timer'] is None:
+                                    p_item['inv_timer'] = now
+                                    log_debug(f"Inventar offen. Starte 3.5s Grace-Period fuer '{rune_name}'...")
+
+                                if now - p_item['inv_timer'] > 3.5:
+                                    if SnippingPrompt is not None and self.prompt_active_for_rune != rune_name:
+                                        log_debug(f"Grace-Period abgelaufen. Triggere Prompt fuer '{rune_name}'.")
+                                        self._open_snipping_prompt(rune_name)
+                                        break
+
+                                if now - p_item['time'] > 60:
+                                    log_debug(f"Timeout fuer '{rune_name}'. Aus Warteliste entfernt.")
+                                    self.pending_items.remove(p_item)
+
+                        elif not inv_open and self.pending_items:
+                            for p_item in self.pending_items:
+                                if p_item['inv_timer'] is not None:
+                                    p_item['inv_timer'] = None
+
+                        # AUTO-PICKUP LOGIK
+                        if auto_pickup_on and match_locs:
                             valid_targets = []
                             for loc in match_locs:
                                 abs_x = monitor["left"] + loc[0]
                                 abs_y = monitor["top"] + loc[1]
                                 name = loc[2]
-
-                                is_safe = False
-                                if now - self.last_click_time < 1.5:
-                                    is_safe = True
-                                elif not self._is_inventory_tooltip(abs_x, abs_y, sw, sh):
-                                    is_safe = True
+                                is_safe = now - self.last_click_time < 1.5 or not self._is_inventory_tooltip(abs_x,
+                                                                                                             abs_y, sw,
+                                                                                                             sh)
 
                                 if is_safe:
                                     dist = math.hypot(abs_x - char_center_x, abs_y - char_center_y)
                                     valid_targets.append((dist, abs_x, abs_y, name))
 
                             if valid_targets:
-                                # --- NEU: Melde ALLE gefundenen Runen sofort an das Overlay ---
-                                if self.drop_callback:
-                                    for vt in valid_targets:
-                                        t_name = vt[3]
-                                        if t_name != "COLOR_MODE":
-                                            # Dateiendung abschneiden und schön formatieren (z.B. jah.png -> Jah)
-                                            clean_name = t_name.replace(".png", "").replace(".jpg", "").replace(".bmp",
-                                                                                                                "").title()
-                                            self.drop_callback(clean_name)
-
-                                # Pickup und Alarm immer für das Ziel ausführen, das am nächsten ist
                                 valid_targets.sort(key=lambda x: x[0])
-                                closest_dist, target_x, target_y, target_name = valid_targets[0]
+                                _, target_x, target_y, target_name = valid_targets[0]
 
-                                if now - self.last_sound_time >= self.cooldown:
-                                    self._trigger_alarm()
-                                    self.last_sound_time = now
-
-                                if auto_pickup_on and target_name != "COLOR_MODE":
+                                if target_name != "COLOR_MODE" and now - self.last_click_time > 1.2:
                                     min_ms = self.config.get("pickup_delay_min", 150)
                                     max_ms = self.config.get("pickup_delay_max", 350)
-                                    if max_ms < min_ms: max_ms = min_ms
-
                                     react_delay = random.uniform(min_ms, max_ms) / 1000.0
-                                    if react_delay > 0: time.sleep(react_delay)
+                                    time.sleep(react_delay)
 
-                                    if max_ms <= 10:
-                                        self._instant_click(target_x, target_y, sw, sh)
+                                    if HumanMouse:
+                                        hm = HumanMouse()
+                                        hm.move_to_humanized(target_x, target_y)
+                                        hm.human_click()
                                     else:
-                                        if HumanMouse:
-                                            hm = HumanMouse()
-                                            hm.move_to_humanized(target_x, target_y)
-                                            hm.human_click()
+                                        self._instant_click(target_x, target_y, sw, sh)
 
                                     self.last_click_time = time.time()
                                     self.active_target_name = target_name
                                     self.active_target_count = sum(1 for t in valid_targets if t[3] == target_name)
-                                    continue
 
                         time.sleep(0.01 if auto_pickup_on else 0.3)
 
                     except Exception as e:
-                        print(f"Drop Watcher Error: {e}")
+                        log_debug(f"Drop Watcher Error: {e}")
                         time.sleep(1)
                 else:
                     time.sleep(1)

@@ -81,7 +81,8 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
         self.current_run_drops = []
 
-        self.drop_watcher = DropWatcher(config_data, drop_callback=self.on_drop_detected) if DropWatcher else None
+        # Hier wurde ui_parent=self hinzugefügt, um das Popup sicher aufrufen zu können
+        self.drop_watcher = DropWatcher(config_data, drop_callback=self.on_drop_detected, ui_parent=self) if DropWatcher else None
         self.xp_watcher = XPWatcher(config_data) if XPWatcher else None
         self.zone_watcher = ZoneWatcher(config_data) if ZoneWatcher else None
 
