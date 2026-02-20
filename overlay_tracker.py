@@ -6,6 +6,10 @@ import math
 import winsound
 import ctypes
 import mss
+import cv2
+import numpy as np
+import os
+import sys
 
 from overlay_config import STEPS_INFO, TrackerConfig
 
@@ -44,6 +48,7 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         super().__init__(parent)
         self.config_data = config_data
         self.configurator = configurator
+        self.parent_app = parent
 
         self.sensors = {k: config_data.get(k) for k in STEPS_INFO.keys()}
 
@@ -66,10 +71,8 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.attributes("-transparentcolor", self.bg_color)
         self.geometry(f"{self.current_width}x{self.current_height}+20+20")
 
-        # Liste für die im aktuellen Run gefundenen Runen
         self.current_run_drops = []
 
-        # Hier übergeben wir unseren Callback (on_drop_detected) an den Scanner
         self.drop_watcher = DropWatcher(config_data, drop_callback=self.on_drop_detected) if DropWatcher else None
         self.xp_watcher = XPWatcher(config_data) if XPWatcher else None
         self.zone_watcher = ZoneWatcher(config_data) if ZoneWatcher else None
@@ -92,11 +95,26 @@ class RunTrackerOverlay(ctk.CTkToplevel):
                                        text_color="#888888")
         self.lbl_status.pack()
 
-        self.lbl_zone = ctk.CTkLabel(self.content_frame, text="📍 Zone: Unbekannt", font=("Roboto", 12, "bold"),
-                                     text_color="#00ccff")
-        self.lbl_zone.pack(pady=(0, 2))
+        # --- Inline Zonen UI ---
+        self.zone_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        self.zone_frame.pack(pady=(0, 2))
 
-        # --- NEU: Live-Loot Anzeige direkt im Overlay ---
+        self.lbl_zone = ctk.CTkLabel(self.zone_frame, text="📍 Zone: Unbekannt", font=("Roboto", 12, "bold"),
+                                     text_color="#00ccff")
+        self.lbl_zone.pack(side="left")
+
+        self.btn_capture_zone = ctk.CTkButton(self.zone_frame, text="?", width=22, height=20, fg_color="#444444",
+                                              hover_color="#1f538d", font=("Roboto", 11, "bold"),
+                                              command=self.open_inline_capture)
+
+        self.entry_zone_name = ctk.CTkEntry(self.zone_frame, width=120, height=22, placeholder_text="Name + Enter",
+                                            font=("Roboto", 11))
+        self.entry_zone_name.bind("<Return>", self.start_inline_capture)
+
+        self.is_capturing_zone = False
+        self.inline_capture_expanded = False
+        # ---------------------------
+
         self.lbl_live_loot = ctk.CTkLabel(self.content_frame, text="", font=("Roboto", 11, "bold"),
                                           text_color="#FFD700")
         self.lbl_live_loot.pack(pady=(0, 2))
@@ -179,10 +197,11 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.context_menu.add_command(label="❌ Beenden", command=self.stop_tracking)
 
         for w in [self.main_frame, self.content_frame, self.lbl_status, self.stats_frame, self.lbl_timer, self.lbl_xp,
-                  self.avg_frame, self.lbl_zone, self.lbl_live_loot]:
+                  self.avg_frame, self.zone_frame, self.lbl_zone, self.lbl_live_loot]:
             w.bind("<Button-1>", self.start_move)
             w.bind("<B1-Motion>", self.do_move)
             w.bind("<Button-3>", self.show_context_menu)
+
         self.lbl_timer.bind("<Button-1>", self.toggle_history)
         self.x = self.y = 0
 
@@ -191,7 +210,162 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         if self.config_data.get("clickthrough", False):
             self.after(300, lambda: self.set_clickthrough(True))
 
-    # --- NEU: Live-Update wenn eine Rune gefunden wurde ---
+    # --- INLINE ZONE CAPTURE LOGIK (Animiert) ---
+    def _animate_width(self, current_w, target_w, step=15):
+        if not self.winfo_exists(): return
+
+        if current_w < target_w:
+            new_w = min(current_w + step, target_w)
+            self.geometry(f"{new_w}x{self.winfo_height()}")
+            if new_w < target_w:
+                self.after(10, self._animate_width, new_w, target_w, step)
+        elif current_w > target_w:
+            new_w = max(current_w - step, target_w)
+            self.geometry(f"{new_w}x{self.winfo_height()}")
+            if new_w > target_w:
+                self.after(10, self._animate_width, new_w, target_w, step)
+
+    def open_inline_capture(self):
+        if self.is_capturing_zone: return
+        self.inline_capture_expanded = True
+        self.btn_capture_zone.pack_forget()
+        self.entry_zone_name.pack(side="left", padx=(5, 0))
+        self.entry_zone_name.focus()
+
+        start_w = self.winfo_width()
+        target_w = self.current_width + 130
+        self._animate_width(start_w, target_w)
+
+    def start_inline_capture(self, event=None):
+        zone_name = self.entry_zone_name.get().strip()
+        if not zone_name:
+            self.close_inline_capture()
+            return
+
+        self.is_capturing_zone = True
+        self.inline_capture_expanded = False
+        self.entry_zone_name.pack_forget()
+
+        start_w = self.winfo_width()
+        target_w = self.current_width
+        self._animate_width(start_w, target_w)
+
+        self.btn_capture_zone.pack(side="left", padx=(5, 0))
+        threading.Thread(target=self._headless_capture_logic, args=(zone_name,), daemon=True).start()
+
+    def close_inline_capture(self):
+        self.inline_capture_expanded = False
+        self.entry_zone_name.pack_forget()
+
+        start_w = self.winfo_width()
+        target_w = self.current_width
+        self._animate_width(start_w, target_w)
+        self.last_zone_check = ""
+
+    def _headless_capture_logic(self, zone_name):
+        # Timer auf 3 Sekunden reduziert
+        for i in range(3, 0, -1):
+            if not self.winfo_exists(): return
+            self.btn_capture_zone.configure(text=f"{i}s", fg_color="#FF9500", text_color="black", state="disabled",
+                                            width=30)
+            winsound.Beep(1000, 100)
+            time.sleep(0.9)
+
+        if not self.winfo_exists(): return
+        self.btn_capture_zone.configure(text="REC", fg_color="#cf222e", text_color="white", width=35)
+
+        try:
+            sw = ctypes.windll.user32.GetSystemMetrics(0)
+            sh = ctypes.windll.user32.GetSystemMetrics(1)
+            x1 = int(sw * 0.75)
+            y1 = int(sh * 0.0)
+            x2 = sw
+            y2 = int(sh * 0.15)
+
+            min_width_threshold = int(sw * 0.055)
+            clean_name = zone_name.replace(" ", "_")
+
+            if getattr(sys, 'frozen', False):
+                base_path = os.path.dirname(sys.executable)
+            else:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+
+            folder_path = os.path.join(base_path, "zones_filter")
+            os.makedirs(folder_path, exist_ok=True)
+            valid_captures = 0
+
+            for i in range(5):
+                with mss.mss() as sct:
+                    monitor = {"top": y1, "left": x1, "width": x2 - x1, "height": y2 - y1}
+                    sct_img = sct.grab(monitor)
+                    screen_bgr = np.array(sct_img)[:, :, :3]
+
+                gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+                _, mask_uint8 = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+
+                kernel = np.ones((3, 40), np.uint8)
+                dilated = cv2.dilate(mask_uint8, kernel, iterations=1)
+                contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                if contours:
+                    rects = []
+                    for cnt in contours:
+                        rx, ry, rw, rh = cv2.boundingRect(cnt)
+                        if rw > 20 and rh > 8:
+                            rects.append((rx, ry, rw, rh))
+
+                    rects.sort(key=lambda r: r[1])
+                    best_rect = None
+                    for r in rects:
+                        if r[2] > min_width_threshold:
+                            best_rect = r
+                            break
+
+                    if best_rect:
+                        bx, by, bw, bh = best_rect
+                        pad = 8
+                        crop_y1 = max(0, by - pad)
+                        crop_y2 = min(screen_bgr.shape[0], by + bh + pad)
+                        crop_x1 = max(0, bx - pad)
+                        crop_x2 = min(screen_bgr.shape[1], bx + bw + pad)
+
+                        final_img = screen_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+                        valid_captures += 1
+                        save_path = os.path.join(folder_path, f"{clean_name}_ref{valid_captures}.png")
+
+                        is_success, im_buf_arr = cv2.imencode(".png", final_img)
+                        if is_success:
+                            with open(save_path, "wb") as f:
+                                f.write(im_buf_arr.tobytes())
+                time.sleep(0.4)
+
+            if valid_captures == 0:
+                winsound.Beep(500, 500)
+                self.btn_capture_zone.configure(text="❌", fg_color="#cf222e", width=22)
+            else:
+                winsound.Beep(1500, 150)
+                winsound.Beep(2000, 200)
+                self.btn_capture_zone.configure(text="✅", fg_color="#2da44e", width=22)
+                self.reload_zone_templates()
+
+        except Exception as e:
+            print(f"Inline Capture Error: {e}")
+            self.btn_capture_zone.configure(text="❌", fg_color="#cf222e", width=22)
+
+        time.sleep(2)
+        self.is_capturing_zone = False
+        self.entry_zone_name.delete(0, 'end')
+
+        if self.winfo_exists() and not self.inline_capture_expanded:
+            self.btn_capture_zone.pack_forget()
+            self.last_zone_check = ""
+
+    def reload_zone_templates(self):
+        if self.zone_watcher:
+            self.zone_watcher._load_templates()
+
+    # --------------------------------
+
     def on_drop_detected(self, drop_name):
         if self.in_game and drop_name not in self.current_run_drops:
             self.current_run_drops.append(drop_name)
@@ -290,7 +464,7 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         self.current_state = "UNKNOWN"
         self.current_run_drops = []
         self.lbl_timer.configure(text="00:00.00")
-        self.lbl_live_loot.configure(text="")  # Feld wieder leeren
+        self.lbl_live_loot.configure(text="")
 
     def reset_session(self):
         self.run_history, self.run_count = [], 0
@@ -387,7 +561,7 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
         self.start_time = 0
         self.current_run_drops = []
-        self.lbl_live_loot.configure(text="")  # Feld für neuen Run leeren
+        self.lbl_live_loot.configure(text="")
 
     def _update_xp_display(self, do_scan=True):
         if self.xp_watcher and self.config_data.get("xp_active"):
@@ -478,8 +652,17 @@ class RunTrackerOverlay(ctk.CTkToplevel):
                         if self.zone_watcher:
                             current_z = self.zone_watcher.current_zone
                             if current_z != self.last_zone_check:
-                                self.lbl_zone.configure(text=f"📍 {current_z}")
+                                if not self.is_capturing_zone:
+                                    self.lbl_zone.configure(text=f"📍 {current_z}")
                                 self.last_zone_check = current_z
+
+                            if not self.is_capturing_zone and not self.inline_capture_expanded:
+                                if current_z == "Unbekannt":
+                                    self.btn_capture_zone.configure(text="?", fg_color="#444444", text_color="white",
+                                                                    state="normal", width=22)
+                                    self.btn_capture_zone.pack(side="left", padx=(5, 0))
+                                else:
+                                    self.btn_capture_zone.pack_forget()
 
                         if now - self.last_xp_check > 2.0:
                             self.last_xp_check = now
@@ -521,6 +704,12 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
                     else:
                         self.lbl_status.configure(text="TABBED OUT (Auto-Pot PAUSE)", text_color="#FF9500")
+
+                        if not self.is_capturing_zone:
+                            self.lbl_zone.configure(text="📍 Zone: (Pausiert)", text_color="#aaaaaa")
+                            self.btn_capture_zone.pack_forget()
+                        self.last_zone_check = ""
+
                         for key in ["hp", "mana", "merc"]:
                             assigned_key = self.config_data.get(f"{key}_key", "Aus")
                             if assigned_key == "Aus":
@@ -530,6 +719,11 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
                 elif self.current_state == "MENU":
                     self.lbl_status.configure(text="MENÜ / LOBBY", text_color="#cf222e")
+
+                    if not self.is_capturing_zone:
+                        self.lbl_zone.configure(text="📍 Zone: (Menü)", text_color="#aaaaaa")
+                        self.btn_capture_zone.pack_forget()
+                    self.last_zone_check = ""
 
                 time.sleep(0.1)
             except Exception as e:

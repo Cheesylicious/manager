@@ -5,6 +5,7 @@ import sys
 import cv2
 import numpy as np
 import mss
+import re
 
 TEMPLATE_FOLDER = "zones_filter"
 
@@ -40,7 +41,9 @@ class ZoneWatcher:
 
         for f in os.listdir(folder_path):
             if f.lower().endswith(('.png', '.jpg', '.bmp')):
-                zone_name = os.path.splitext(f)[0].replace("_", " ")
+                base_name = os.path.splitext(f)[0]
+                zone_name = re.sub(r'_ref\d+$', '', base_name).replace("_", " ")
+
                 full_path = os.path.join(folder_path, f)
 
                 try:
@@ -53,7 +56,7 @@ class ZoneWatcher:
 
                 if tmpl is not None:
                     gray = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
-                    _, tmpl_binary = cv2.threshold(gray, 170, 255, cv2.THRESH_BINARY)
+                    _, tmpl_binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
 
                     contours, _ = cv2.findContours(tmpl_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     if contours:
@@ -61,10 +64,11 @@ class ZoneWatcher:
                         tmpl_cropped = tmpl_binary[y:y + h, x:x + w]
 
                         tmpl_px = cv2.countNonZero(tmpl_cropped)
-                        if tmpl_px > 10:
-                            # Wir speichern jetzt wieder die exakte Pixelanzahl des Wortes ab
+                        if tmpl_px > 50:
                             self.templates.append((zone_name, tmpl_cropped, tmpl_px))
-                            print(f" -> Zone geladen: {zone_name} ({tmpl_px} Px)")
+                            print(f" -> Zone geladen: {zone_name} (aus {f})")
+                        else:
+                            print(f" -> IGNORIERT: {f} enthält zu wenig Text ({tmpl_px} Px)")
 
     def start(self):
         if not self.running:
@@ -100,8 +104,36 @@ class ZoneWatcher:
                     screen_bgr = np.array(sct_img)[:, :, :3]
 
                     gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
-                    _, screen_binary = cv2.threshold(gray, 170, 255, cv2.THRESH_BINARY)
+                    _, screen_binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
 
+                    # --- DER ULTIMATIVE MENÜ-FILTER (Top-Right Anchor) ---
+                    # Wir suchen nach einzelnen Buchstaben, ganz ohne Dilation/Verschmelzung.
+                    contours, _ = cv2.findContours(screen_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                    # Die absolute Extrem-Ecke (8% vom rechten Rand, 8% vom oberen Rand)
+                    top_right_margin_x = int(sw * 0.08)
+                    top_right_margin_y = int(sh * 0.08)
+
+                    anchor_letters = 0
+                    if contours:
+                        for cnt in contours:
+                            rx, ry, rw, rh = cv2.boundingRect(cnt)
+                            # Filtern auf die typische Größe eines Buchstabens (ignoriert große Zauber/UI-Ränder)
+                            if 2 <= rw <= 40 and 5 <= rh <= 40:
+                                dist_to_right = monitor["width"] - (rx + rw)
+
+                                # Ist der Buchstabe ganz oben und klebt am rechten Rand?
+                                if dist_to_right < top_right_margin_x and ry < top_right_margin_y:
+                                    anchor_letters += 1
+
+                    # Wenn in dieser extremen Ecke weniger als 2 Buchstaben sind
+                    # (z.B. keine Uhrzeit "11:50" und kein Zonenende "oor" von Moor),
+                    # dann ist ein Inventar/Menü offen ODER die Karte ist zu! -> Gedächtnis behalten!
+                    if anchor_letters < 2:
+                        time.sleep(1.0)
+                        continue
+
+                    # --- Ab hier: Karte ist zu 100% offen und kein Menü stört ---
                     best_zone = "Unbekannt"
                     highest_score = 0.0
 
@@ -110,9 +142,8 @@ class ZoneWatcher:
                         if th > screen_binary.shape[0] or tw > screen_binary.shape[1]:
                             continue
 
-                        # Grober Suchlauf
                         res = cv2.matchTemplate(screen_binary, tmpl_bin, cv2.TM_CCOEFF_NORMED)
-                        loc = np.where(res >= 0.35)
+                        loc = np.where(res >= 0.55)
 
                         for pt in zip(*loc[::-1]):
                             matched_area = screen_binary[pt[1]:pt[1] + th, pt[0]:pt[0] + tw]
@@ -121,16 +152,13 @@ class ZoneWatcher:
                             overlap_px = cv2.countNonZero(intersection)
                             area_px = cv2.countNonZero(matched_area)
 
-                            # REGEL 1: Mindestens 75% des Textes müssen sichtbar sein
-                            if overlap_px < (tmpl_px * 0.75):
+                            if overlap_px < (tmpl_px * 0.85):
                                 continue
 
-                            # REGEL 2: Der Bereich darf nicht viel mehr weiße Pixel enthalten als das Template.
-                            # (Das verhindert, dass Eishochland als Teil von Harrogath gewertet wird!)
-                            if area_px > (tmpl_px * 1.35):
+                            noise_px = area_px - overlap_px
+                            if noise_px > (tmpl_px * 0.60):
                                 continue
 
-                            # Punkte berechnen
                             score = overlap_px / float(max(1, tmpl_px))
                             if score > highest_score:
                                 highest_score = score
