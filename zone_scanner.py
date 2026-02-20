@@ -93,6 +93,9 @@ class ZoneWatcher:
         y2 = int(sh * 0.20)
         monitor = {"top": y1, "left": x1, "width": x2 - x1, "height": y2 - y1}
 
+        # Minimale Breite für einen Zonen-Namen (ca. 5.5% der Bildschirmbreite)
+        min_width_threshold = int(sw * 0.055)
+
         with mss.mss() as sct:
             while not self.stop_event.is_set():
                 try:
@@ -106,11 +109,26 @@ class ZoneWatcher:
                     gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
                     _, screen_binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
 
-                    # --- DER ULTIMATIVE MENÜ-FILTER (Top-Right Anchor) ---
-                    # Wir suchen nach einzelnen Buchstaben, ganz ohne Dilation/Verschmelzung.
-                    contours, _ = cv2.findContours(screen_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    # 1. Breiten-Filter (Schützt vor Rauschen bei ausgeschalteter Karte)
+                    kernel = np.ones((5, 40), np.uint8)
+                    dilated = cv2.dilate(screen_binary, kernel, iterations=1)
+                    contours_dilated, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                    # Die absolute Extrem-Ecke (8% vom rechten Rand, 8% vom oberen Rand)
+                    has_wide_text = False
+                    if contours_dilated:
+                        for cnt in contours_dilated:
+                            rx, ry, rw, rh = cv2.boundingRect(cnt)
+                            if rw > min_width_threshold and rh > 8:
+                                has_wide_text = True
+                                break
+
+                    if not has_wide_text:
+                        # Kein breiter Text = Karte ist aus und kein Menü stört. Gedächtnis behalten.
+                        time.sleep(1.0)
+                        continue
+
+                    # 2. Anchor-Filter (Der perfekte Inventar-Blocker)
+                    contours, _ = cv2.findContours(screen_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     top_right_margin_x = int(sw * 0.08)
                     top_right_margin_y = int(sh * 0.08)
 
@@ -118,22 +136,18 @@ class ZoneWatcher:
                     if contours:
                         for cnt in contours:
                             rx, ry, rw, rh = cv2.boundingRect(cnt)
-                            # Filtern auf die typische Größe eines Buchstabens (ignoriert große Zauber/UI-Ränder)
                             if 2 <= rw <= 40 and 5 <= rh <= 40:
                                 dist_to_right = monitor["width"] - (rx + rw)
-
-                                # Ist der Buchstabe ganz oben und klebt am rechten Rand?
                                 if dist_to_right < top_right_margin_x and ry < top_right_margin_y:
                                     anchor_letters += 1
 
-                    # Wenn in dieser extremen Ecke weniger als 2 Buchstaben sind
-                    # (z.B. keine Uhrzeit "11:50" und kein Zonenende "oor" von Moor),
-                    # dann ist ein Inventar/Menü offen ODER die Karte ist zu! -> Gedächtnis behalten!
                     if anchor_letters < 2:
+                        # Breiter Text (z.B. "INVENTAR") ist da, aber die Minimap-Ecke ist leer.
+                        # -> Inventar/Menü ist offen! Gedächtnis behalten.
                         time.sleep(1.0)
                         continue
 
-                    # --- Ab hier: Karte ist zu 100% offen und kein Menü stört ---
+                    # --- Ab hier: Karte ist zu 100% offen und wir können Zonen checken ---
                     best_zone = "Unbekannt"
                     highest_score = 0.0
 
@@ -164,6 +178,9 @@ class ZoneWatcher:
                                 highest_score = score
                                 best_zone = name
 
+                    # Da wir durch unsere Filter sicher sind, dass es sich um die Karte handelt,
+                    # können wir unbekannte Zonen auch wieder sicher als "Unbekannt" ausgeben.
+                    # Das triggert dann im Overlay sofort das "?" zum Neuanlegen!
                     self.current_zone = best_zone
                     time.sleep(1.0)
 

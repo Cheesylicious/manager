@@ -13,6 +13,14 @@ import sys
 
 from overlay_config import STEPS_INFO, TrackerConfig
 
+# Import für die externe Zonen-Datenbank (verhindert Monolithenbildung)
+try:
+    from zone_data import get_zones_for_act
+except ImportError:
+    # Fallback, falls die Datei noch nicht im Ordner liegt
+    def get_zones_for_act(act):
+        return []
+
 try:
     import sys_hooks
 except ImportError:
@@ -95,7 +103,7 @@ class RunTrackerOverlay(ctk.CTkToplevel):
                                        text_color="#888888")
         self.lbl_status.pack()
 
-        # --- Inline Zonen UI ---
+        # --- Inline Zonen UI (Optimiert für schnelle Akt-Auswahl) ---
         self.zone_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.zone_frame.pack(pady=(0, 2))
 
@@ -107,9 +115,19 @@ class RunTrackerOverlay(ctk.CTkToplevel):
                                               hover_color="#1f538d", font=("Roboto", 11, "bold"),
                                               command=self.open_inline_capture)
 
-        self.entry_zone_name = ctk.CTkEntry(self.zone_frame, width=120, height=22, placeholder_text="Name + Enter",
-                                            font=("Roboto", 11))
-        self.entry_zone_name.bind("<Return>", self.start_inline_capture)
+        self.selection_container = ctk.CTkFrame(self.zone_frame, fg_color="transparent")
+
+        self.act_btn_frame = ctk.CTkFrame(self.selection_container, fg_color="transparent")
+        for act in ["A1", "A2", "A3", "A4", "A5"]:
+            btn = ctk.CTkButton(self.act_btn_frame, text=act, width=28, height=20, font=("Roboto", 11, "bold"),
+                                fg_color="#1f538d", hover_color="#2da44e",
+                                command=lambda a=act: self.show_zone_dropdown(a))
+            btn.pack(side="left", padx=1)
+
+        self.dropdown_var = ctk.StringVar(value="Wähle...")
+        self.zone_dropdown = ctk.CTkOptionMenu(self.selection_container, variable=self.dropdown_var,
+                                               values=["Wähle..."], width=130, height=22,
+                                               font=("Roboto", 11), command=self.start_inline_capture_dropdown)
 
         self.is_capturing_zone = False
         self.inline_capture_expanded = False
@@ -210,7 +228,7 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         if self.config_data.get("clickthrough", False):
             self.after(300, lambda: self.set_clickthrough(True))
 
-    # --- INLINE ZONE CAPTURE LOGIK (Animiert) ---
+    # --- INLINE ZONE CAPTURE LOGIK (Animiert & Akt-Basiert) ---
     def _animate_width(self, current_w, target_w, step=15):
         if not self.winfo_exists(): return
 
@@ -229,22 +247,39 @@ class RunTrackerOverlay(ctk.CTkToplevel):
         if self.is_capturing_zone: return
         self.inline_capture_expanded = True
         self.btn_capture_zone.pack_forget()
-        self.entry_zone_name.pack(side="left", padx=(5, 0))
-        self.entry_zone_name.focus()
+
+        # Ändert den Text sauber zu "Unbekannt"
+        self.lbl_zone.configure(text="📍 Unbekannt")
+
+        self.selection_container.pack(side="left", padx=(5, 0))
+        self.zone_dropdown.pack_forget()
+        self.act_btn_frame.pack(side="left")
 
         start_w = self.winfo_width()
-        target_w = self.current_width + 130
+        target_w = self.current_width + 160  # Platz für die Akt-Buttons
         self._animate_width(start_w, target_w)
 
-    def start_inline_capture(self, event=None):
-        zone_name = self.entry_zone_name.get().strip()
-        if not zone_name:
+    def show_zone_dropdown(self, act_name):
+        zones = get_zones_for_act(act_name)
+        if not zones:
+            zones = ["Keine Daten"]
+
+        zones.insert(0, "- Abbrechen -")
+        self.dropdown_var.set("Gebiet wählen...")
+        self.zone_dropdown.configure(values=zones)
+
+        self.act_btn_frame.pack_forget()
+        self.zone_dropdown.pack(side="left")
+
+    def start_inline_capture_dropdown(self, zone_name):
+        if zone_name == "- Abbrechen -" or zone_name == "Gebiet wählen..." or zone_name == "Keine Daten":
             self.close_inline_capture()
             return
 
         self.is_capturing_zone = True
         self.inline_capture_expanded = False
-        self.entry_zone_name.pack_forget()
+        self.selection_container.pack_forget()
+        self.zone_dropdown.pack_forget()
 
         start_w = self.winfo_width()
         target_w = self.current_width
@@ -255,7 +290,9 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
     def close_inline_capture(self):
         self.inline_capture_expanded = False
-        self.entry_zone_name.pack_forget()
+        self.selection_container.pack_forget()
+        self.act_btn_frame.pack_forget()
+        self.zone_dropdown.pack_forget()
 
         start_w = self.winfo_width()
         target_w = self.current_width
@@ -354,7 +391,6 @@ class RunTrackerOverlay(ctk.CTkToplevel):
 
         time.sleep(2)
         self.is_capturing_zone = False
-        self.entry_zone_name.delete(0, 'end')
 
         if self.winfo_exists() and not self.inline_capture_expanded:
             self.btn_capture_zone.pack_forget()
