@@ -93,7 +93,7 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
 
         # REIHE 3: ZONEN & EXP & GHOST
         e_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        e_frame.pack(fill="x", padx=15, pady=(5, 15))
+        e_frame.pack(fill="x", padx=15, pady=5)
 
         self.xp_var = ctk.BooleanVar(value=self.config_data.get("xp_active", False))
         ctk.CTkCheckBox(e_frame, text="📈 EXP-Tracker", variable=self.xp_var, command=self.save_xp,
@@ -106,6 +106,14 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         cb_ghost = ctk.CTkCheckBox(e_frame, text="👻 Ghost-Modus", variable=self.ghost_var,
                                    command=self.save_ghost, text_color="#aaaaaa")
         cb_ghost.pack(side="left", padx=5)
+
+        # REIHE 4: TERROR ZONEN
+        tz_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        tz_frame.pack(fill="x", padx=15, pady=(5, 15))
+
+        self.tz_var = ctk.BooleanVar(value=self.config_data.get("show_next_tz", True))
+        ctk.CTkCheckBox(tz_frame, text="🔮 Nächste Terrorzone (D2Emu) anzeigen", variable=self.tz_var, command=self.save_tz,
+                        text_color="#aa88ff").pack(side="left", padx=(0, 5))
 
         calib_frame = ctk.CTkFrame(self, border_width=1, border_color="#333")
         calib_frame.pack(fill="x", padx=10, pady=10)
@@ -248,6 +256,15 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         self.config_data["clickthrough"] = self.ghost_var.get()
         TrackerConfig.save(self.config_data)
         if self.overlay: self.overlay.set_clickthrough(self.ghost_var.get())
+
+    def save_tz(self):
+        self.config_data["show_next_tz"] = self.tz_var.get()
+        TrackerConfig.save(self.config_data)
+        if self.overlay and hasattr(self.overlay, "lbl_next_tz"):
+            if self.tz_var.get():
+                self.overlay.lbl_next_tz.pack(pady=(2, 2))
+            else:
+                self.overlay.lbl_next_tz.pack_forget()
 
     def on_calib_done(self, res):
         self.config_data.update(res)

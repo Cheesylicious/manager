@@ -5,6 +5,7 @@ import ctypes
 import winsound
 
 from overlay_config import STEPS_INFO, TrackerConfig
+from tz_fetcher import TZFetcher
 
 # Mixins importieren
 from tracker_zone_capture import ZoneCaptureMixin
@@ -87,6 +88,10 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.last_zone_check = ""
         self.blink_state = False
 
+        # Startet den Fetcher für die nächste TZ
+        self.tz_fetcher = TZFetcher(self.stop_event)
+        self.tz_fetcher.start(self.update_next_tz_ui)
+
         self.after(200, self.apply_stealth_mode)
         self.after(1000, self._blink_loop)
 
@@ -150,6 +155,12 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                                                values=["Wähle..."], width=130, height=22, font=("Roboto", 11),
                                                command=self.start_inline_capture_dropdown)
         # ----------------------
+
+        # NEU: Label für nächste Terrorzone
+        self.lbl_next_tz = ctk.CTkLabel(self.zone_wrapper, text="🔮 Nächste TZ: Lade...", font=("Roboto", 11, "bold"),
+                                        text_color="#aa88ff")
+        if self.config_data.get("show_next_tz", True):
+            self.lbl_next_tz.pack(pady=(2, 2))
 
         self.is_capturing_zone = False
         self.inline_capture_expanded = False
@@ -274,6 +285,10 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
             w.bind("<B1-Motion>", self.do_move)
             w.bind("<Button-3>", self.show_context_menu)
         self.x = self.y = 0
+
+    def update_next_tz_ui(self, text):
+        if self.winfo_exists() and hasattr(self, "lbl_next_tz"):
+            self.lbl_next_tz.configure(text=f"🔮 Nächste TZ: {text}")
 
     def reload_config(self):
         self.hp_key = self.config_data.get("hp_key", "Aus")
