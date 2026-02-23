@@ -1,10 +1,8 @@
 import customtkinter as ctk
-import time
-import threading
 import ctypes
-import winsound
-from PIL import ImageGrab
 from overlay_config import STEPS_INFO
+from calibration_snipping_tool import CalibrationSnippingTool
+
 
 class CalibrationOverlay(ctk.CTkToplevel):
     def __init__(self, parent, keys_to_calibrate, callback):
@@ -37,7 +35,7 @@ class CalibrationOverlay(ctk.CTkToplevel):
         self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.btn_frame.pack(pady=10)
 
-        self.btn_action = ctk.CTkButton(self.btn_frame, text="Starten", command=self.start_countdown,
+        self.btn_action = ctk.CTkButton(self.btn_frame, text="Starten", command=self.start_tool,
                                         fg_color="#1f538d", height=50, font=("Roboto", 14, "bold"))
         self.btn_action.pack(side="left", padx=10)
 
@@ -62,83 +60,39 @@ class CalibrationOverlay(ctk.CTkToplevel):
             return
 
         current_key = self.keys[self.current_index]
-        name, desc, time_sec = STEPS_INFO[current_key]
+        name, desc, _ = STEPS_INFO[current_key]
 
         self.lbl_step.configure(text=f"Schritt {self.current_index + 1} von {len(self.keys)}")
         self.lbl_title_step.configure(text=name)
         self.lbl_desc.configure(text=desc)
         self.lbl_count.configure(text="Bist du bereit?", text_color="#888888")
-        self.btn_action.configure(state="normal", text=f"Starten ({time_sec} Sek)")
+        self.btn_action.configure(state="normal", text="Auswählen ✂️")
         self.btn_skip.configure(state="normal")
 
     def skip_step(self):
         self.current_index += 1
         self.setup_step()
 
-    def start_countdown(self):
+    def start_tool(self):
         self.btn_action.configure(state="disabled")
         self.btn_skip.configure(state="disabled")
+        self.lbl_count.configure(text="Snipping Tool aktiv...", text_color="#00ccff")
+
         current_key = self.keys[self.current_index]
-        time_sec = STEPS_INFO[current_key][2]
+        name, desc, _ = STEPS_INFO[current_key]
 
-        if current_key == "loading_screen":
-            threading.Thread(target=self._click_record_logic, args=(time_sec, current_key), daemon=True).start()
+        # Startet das neue Snipping-Tool für den aktuellen Schritt (current_key wird übergeben)
+        CalibrationSnippingTool(self, current_key, name, desc, lambda res: self.on_snipping_success(current_key, res))
+
+    def on_snipping_success(self, key, result_data):
+        # Wichtig für Kompatibilität: Ladebildschirm erwartete in der alten Version eine Liste.
+        if key == "loading_screen":
+            self.results[key] = [result_data]
         else:
-            threading.Thread(target=self._count_logic, args=(time_sec, current_key), daemon=True).start()
-
-    def _click_record_logic(self, seconds, key):
-        time.sleep(0.5)
-        end_time = time.time() + seconds
-        clicks = []
-        was_pressed = False
-
-        while time.time() < end_time:
-            remaining = int(end_time - time.time())
-            self.lbl_count.configure(text=f"Klick-Modus aktiv! ({remaining}s)\nKLICKE JETZT!", text_color="#FF9500")
-
-            if ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000:
-                if not was_pressed:
-                    try:
-                        x, y = self.winfo_pointerxy()
-                        img = ImageGrab.grab(bbox=(x, y, x + 1, y + 1))
-                        c = img.getpixel((0, 0))
-                        clicks.append({"x": x, "y": y, "r": c[0], "g": c[1], "b": c[2]})
-                        winsound.Beep(2000, 50)
-                    except:
-                        pass
-                    was_pressed = True
-            else:
-                was_pressed = False
-
-            time.sleep(0.01)
-
-        if clicks:
-            self.results[key] = clicks
-            winsound.Beep(1000, 300)
+            self.results[key] = result_data
 
         self.current_index += 1
         self.after(500, self.setup_step)
-
-    def _count_logic(self, seconds, key):
-        for i in range(seconds, 0, -1):
-            color = "#FF3333" if i <= 3 else "#00ccff"
-            self.lbl_count.configure(text=str(i), text_color=color)
-            time.sleep(1)
-
-        try:
-            x, y = self.winfo_pointerxy()
-            img = ImageGrab.grab(bbox=(x, y, x + 1, y + 1))
-            c = img.getpixel((0, 0))
-            winsound.Beep(1500, 100)
-
-            self.results[key] = {"x": x, "y": y, "r": c[0], "g": c[1], "b": c[2]}
-
-            self.current_index += 1
-            self.after(500, self.setup_step)
-        except Exception as e:
-            print(f"Fehler beim Grabben: {e}")
-            self.current_index += 1
-            self.after(500, self.setup_step)
 
     def finish(self):
         self.callback(self.results)

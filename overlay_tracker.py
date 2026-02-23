@@ -1,6 +1,8 @@
 import customtkinter as ctk
 import tkinter as tk
 import threading
+import ctypes
+import winsound
 
 from overlay_config import STEPS_INFO, TrackerConfig
 
@@ -64,6 +66,9 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
 
         self.current_run_drops = []
         self.pending_runes = []
+
+        # NEU: Speichert das Fenster für Multiboxing
+        self.bound_hwnd = None
 
         self.drop_watcher = DropWatcher(config_data, drop_callback=self.on_drop_detected,
                                         ui_parent=self) if DropWatcher else None
@@ -231,7 +236,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                                            text_color="#2da44e")
         self.cb_autopickup.grid(row=0, column=0, pady=10, padx=10, sticky="w")
 
-        # NEUER TEXT HIER
         lbl_learn = ctk.CTkLabel(self.tools_frame, text="Runen Scanner anlernen (Falls noch nicht erkannt):",
                                  font=("Roboto", 11, "bold"), text_color="#aaaaaa")
         lbl_learn.grid(row=1, column=0, pady=(0, 5), padx=10, sticky="w")
@@ -254,6 +258,8 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.resizer.bind("<ButtonRelease-1>", self.resize_end)
 
         self.context_menu = tk.Menu(self, tearoff=0, bg="#2b2b2b", fg="white")
+        # NEU: Binding Button im Menü!
+        self.context_menu.add_command(label="🔗 An aktuelles Spiel binden", command=self.bind_to_active_window)
         self.context_menu.add_command(label="⏸️ Pause", command=self.toggle_pause)
         self.context_menu.add_command(label="👻 Ghost-Modus (EIN/AUS per Strg+Alt+G)",
                                       command=lambda: self.set_clickthrough(True))
@@ -306,3 +312,38 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                 self.lbl_zone.configure(text_color="#00ccff")
 
         self.after(600, self._blink_loop)
+
+    def bind_to_active_window(self):
+        """Bindet den Tracker manuell an das Fenster, das gerade im Vordergrund ist."""
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if hwnd:
+            self.bound_hwnd = hwnd
+            winsound.Beep(1500, 100)
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.configure(text="MANUELL GEBUNDEN", text_color="#00ccff")
+
+    def _is_d2r_foreground(self):
+        """
+        Überschreibt die Mixin-Methode, um sauberes Multiboxing zu ermöglichen.
+        Ignoriert fremde D2R-Fenster und schickt den Tracker in den Pause-Modus.
+        """
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd: return False
+
+            # 1. Wenn wir gebunden sind, muss es exakt dieses HWND-Fenster sein!
+            if getattr(self, "bound_hwnd", None) is not None:
+                return hwnd == self.bound_hwnd
+
+            # 2. Wenn noch nicht gebunden, binden wir uns an das erste Diablo-Fenster, das wir sehen
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            if length == 0: return False
+            buff = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buff, length + 1)
+
+            if "Diablo" in buff.value:
+                self.bound_hwnd = hwnd  # BINDING SETZEN!
+                return True
+            return False
+        except:
+            return False

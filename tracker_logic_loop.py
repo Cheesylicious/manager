@@ -4,6 +4,10 @@ import math
 import ctypes
 import winsound
 import mss
+import cv2
+import numpy as np
+import os
+import sys
 
 try:
     import sys_hooks
@@ -12,6 +16,7 @@ except ImportError:
         import d2r_input as sys_hooks
     except ImportError:
         sys_hooks = None
+
 
 class PotionLogicMixin:
     def _eval_state(self, key1, key2=None):
@@ -27,11 +32,21 @@ class PotionLogicMixin:
         try:
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             if not hwnd: return False
+
+            # Berücksichtigung des Multiboxing-Bindings (aus WindowStateMixin / TrackerOverlay)
+            if getattr(self, "bound_hwnd", None) is not None:
+                return hwnd == self.bound_hwnd
+
             length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
             if length == 0: return False
             buff = ctypes.create_unicode_buffer(length + 1)
             ctypes.windll.user32.GetWindowTextW(hwnd, buff, length + 1)
-            return "Diablo" in buff.value
+
+            if "Diablo" in buff.value:
+                # Falls noch nicht gebunden, binde an dieses Fenster
+                self.bound_hwnd = hwnd
+                return True
+            return False
         except:
             return False
 
@@ -60,29 +75,32 @@ class PotionLogicMixin:
             if self.paused: time.sleep(0.5); continue
 
             try:
-                is_char = self._eval_state("char_sel_1", "char_sel_2")
-                is_lobby = self._eval_state("lobby_1", "lobby_2")
-                is_game = self._eval_state("game_static")
+                # Prüfen, ob das gebundene Fenster im Fokus ist
+                is_active_window = self._is_d2r_foreground()
 
-                if is_game:
-                    new_state = "GAME"
-                elif is_char or is_lobby:
-                    new_state = "MENU"
-                else:
-                    new_state = self.current_state
+                if is_active_window:
+                    is_char = self._eval_state("char_sel_1", "char_sel_2")
+                    is_lobby = self._eval_state("lobby_1", "lobby_2")
+                    is_game = self._eval_state("game_static")
 
-                if new_state == "GAME" and self.current_state != "GAME":
-                    if not self.in_game:
-                        self.start_time = time.time()
-                        self.in_game = True
-                elif new_state == "MENU" and self.current_state == "GAME":
-                    self.finish_run()
-                    self.in_game = False
+                    if is_game:
+                        new_state = "GAME"
+                    elif is_char or is_lobby:
+                        new_state = "MENU"
+                    else:
+                        new_state = self.current_state
 
-                self.current_state = new_state
+                    if new_state == "GAME" and self.current_state != "GAME":
+                        if not self.in_game:
+                            self.start_time = time.time()
+                            self.in_game = True
+                    elif new_state == "MENU" and self.current_state == "GAME":
+                        self.finish_run()
+                        self.in_game = False
 
-                if self.current_state == "GAME":
-                    if self._is_d2r_foreground():
+                    self.current_state = new_state
+
+                    if self.current_state == "GAME":
                         self.lbl_status.configure(text="AKTIV IM SPIEL", text_color="#2da44e")
                         now = time.time()
 
@@ -93,7 +111,7 @@ class PotionLogicMixin:
                                     self.lbl_zone.configure(text=f"📍 {current_z}")
                                 self.last_zone_check = current_z
 
-                            if not self.is_capturing_zone and not self.inline_capture_expanded:
+                            if not self.is_capturing_zone and not getattr(self, "inline_capture_expanded", False):
                                 if current_z == "Unbekannt":
                                     self.btn_capture_zone.configure(text="?", fg_color="#444444", text_color="white",
                                                                     state="normal", width=22)
@@ -139,28 +157,28 @@ class PotionLogicMixin:
                         self._update_sensor_ui("mana", self.mana_key, mp_match, mp_col)
                         self._update_sensor_ui("merc", self.merc_key, mc_match, mc_col)
 
-                    else:
-                        self.lbl_status.configure(text="TABBED OUT (Auto-Pot PAUSE)", text_color="#FF9500")
+                    elif self.current_state == "MENU":
+                        self.lbl_status.configure(text="MENÜ / LOBBY", text_color="#cf222e")
 
                         if not self.is_capturing_zone:
-                            self.lbl_zone.configure(text="📍 Zone: (Pausiert)", text_color="#aaaaaa")
+                            self.lbl_zone.configure(text="📍 Zone: (Menü)", text_color="#aaaaaa")
                             self.btn_capture_zone.pack_forget()
                         self.last_zone_check = ""
-
-                        for key in ["hp", "mana", "merc"]:
-                            assigned_key = self.config_data.get(f"{key}_key", "Aus")
-                            if assigned_key == "Aus":
-                                self.sensors_ui[key]["status"].configure(text="AUS", text_color="#555555")
-                            else:
-                                self.sensors_ui[key]["status"].configure(text="PAUSE", text_color="#FF9500")
-
-                elif self.current_state == "MENU":
-                    self.lbl_status.configure(text="MENÜ / LOBBY", text_color="#cf222e")
+                else:
+                    # Nicht im gebundenen Spiel = Pause
+                    self.lbl_status.configure(text="TABBED OUT (Auto-Pot PAUSE)", text_color="#FF9500")
 
                     if not self.is_capturing_zone:
-                        self.lbl_zone.configure(text="📍 Zone: (Menü)", text_color="#aaaaaa")
+                        self.lbl_zone.configure(text="📍 Zone: (Pausiert)", text_color="#aaaaaa")
                         self.btn_capture_zone.pack_forget()
                     self.last_zone_check = ""
+
+                    for key in ["hp", "mana", "merc"]:
+                        assigned_key = self.config_data.get(f"{key}_key", "Aus")
+                        if assigned_key == "Aus":
+                            self.sensors_ui[key]["status"].configure(text="AUS", text_color="#555555")
+                        else:
+                            self.sensors_ui[key]["status"].configure(text="PAUSE", text_color="#FF9500")
 
                 time.sleep(0.1)
             except Exception as e:
@@ -169,17 +187,71 @@ class PotionLogicMixin:
     def _check_color(self, cfg, mode="match"):
         if not cfg: return False, (0, 0, 0)
 
+        # Kompatibilität für Listen (z.B. loading_screen)
         if isinstance(cfg, list):
             if len(cfg) == 0: return False, (0, 0, 0)
             matches = 0
             last_color = (0, 0, 0)
             for point in cfg:
-                match, c = self._check_single_pixel(point, mode)
+                match, c = self._check_color(point, mode)
                 if match: matches += 1
                 last_color = c
             return (matches > 0 and matches >= (len(cfg) / 2)), last_color
 
+        # Wenn es sich um ein ausgeschnittenes Bild handelt (Template)
+        if isinstance(cfg, dict) and cfg.get("is_template"):
+            return self._check_template(cfg)
+
+        # Fallback auf einzelnen Pixel
         return self._check_single_pixel(cfg, mode)
+
+    def _check_template(self, cfg):
+        """Innovatives, extrem ressourcenschonendes Template Matching für Zustände."""
+        try:
+            template_path = cfg.get("template_path")
+
+            # Pfad auflösen (Absolut machen, falls relativ)
+            if not os.path.isabs(template_path):
+                if getattr(sys, 'frozen', False):
+                    base_path = os.path.dirname(sys.executable)
+                else:
+                    base_path = os.path.dirname(os.path.abspath(__file__))
+                template_path = os.path.join(base_path, template_path)
+
+            if not os.path.exists(template_path):
+                return False, (0, 0, 0)
+
+            tmpl = cv2.imread(template_path)
+            if tmpl is None:
+                return False, (0, 0, 0)
+
+            x1, y1, x2, y2 = cfg.get("box", (0, 0, 0, 0))
+            if x2 <= x1 or y2 <= y1:
+                return False, (0, 0, 0)
+
+            # Wir grabben nicht den ganzen Bildschirm (Monolith/Performance-Fresser),
+            # sondern nur exakt den Bereich + 10 Pixel Toleranzrand! (Regel 2)
+            pad = 10
+            top = max(0, y1 - pad)
+            left = max(0, x1 - pad)
+            width = (x2 - x1) + pad * 2
+            height = (y2 - y1) + pad * 2
+
+            with mss.mss() as sct:
+                monitor = {"top": int(top), "left": int(left), "width": int(width), "height": int(height)}
+                sct_img = sct.grab(monitor)
+                screen_bgr = np.array(sct_img)[:, :, :3]
+
+            res = cv2.matchTemplate(screen_bgr, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
+
+            # Bei einer Übereinstimmung von über 85% gehen wir davon aus, dass wir im Menü sind
+            if max_val >= 0.85:
+                return True, (cfg.get("r", 0), cfg.get("g", 0), cfg.get("b", 0))
+
+            return False, (0, 0, 0)
+        except:
+            return False, (0, 0, 0)
 
     def _check_single_pixel(self, point, mode):
         try:
