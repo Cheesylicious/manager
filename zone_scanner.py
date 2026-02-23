@@ -11,7 +11,6 @@ TEMPLATE_FOLDER = "zones_filter"
 
 
 class ZoneWatcher:
-    # ui_parent hinzugefügt, um auf das gebundene Fenster des Overlays zugreifen zu können
     def __init__(self, config_data, ui_parent=None):
         self.running = False
         self.thread = None
@@ -58,6 +57,7 @@ class ZoneWatcher:
 
                 if tmpl is not None:
                     gray = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
+                    # Zurück auf saubere 180!
                     _, tmpl_binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
 
                     contours, _ = cv2.findContours(tmpl_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -92,23 +92,20 @@ class ZoneWatcher:
         x1 = int(sw * 0.70)
         y1 = int(sh * 0.0)
         x2 = sw
-        y2 = int(sh * 0.20)
+        # Auf 25% lassen, damit Zone in Multiplayer-Games erfasst wird
+        y2 = int(sh * 0.25)
         monitor = {"top": y1, "left": x1, "width": x2 - x1, "height": y2 - y1}
 
-        # Minimale Breite für einen Zonen-Namen (ca. 5.5% der Bildschirmbreite)
         min_width_threshold = int(sw * 0.055)
 
         with mss.mss() as sct:
             while not self.stop_event.is_set():
                 try:
-                    # --- MULTIBOXING PERFORMANCE CHECK ---
-                    # Pausiert den Zonen-Scanner sofort, wenn das falsche Diablo-Fenster im Vordergrund ist
                     if self.ui_parent and hasattr(self.ui_parent, "bound_hwnd") and self.ui_parent.bound_hwnd is not None:
                         current_hwnd = windll.user32.GetForegroundWindow()
                         if current_hwnd != self.ui_parent.bound_hwnd:
                             time.sleep(0.5)
                             continue
-                    # ---------------------------------------
 
                     if not self.templates:
                         time.sleep(2)
@@ -118,9 +115,10 @@ class ZoneWatcher:
                     screen_bgr = np.array(sct_img)[:, :, :3]
 
                     gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+                    # Zurück auf saubere 180!
                     _, screen_binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
 
-                    # 1. Breiten-Filter (Schützt vor Rauschen bei ausgeschalteter Karte)
+                    # Zurück auf den perfekten Text-Block-Kernel (5, 40)
                     kernel = np.ones((5, 40), np.uint8)
                     dilated = cv2.dilate(screen_binary, kernel, iterations=1)
                     contours_dilated, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -134,14 +132,13 @@ class ZoneWatcher:
                                 break
 
                     if not has_wide_text:
-                        # Kein breiter Text = Karte ist aus und kein Menü stört. Gedächtnis behalten.
                         time.sleep(1.0)
                         continue
 
-                    # 2. Anchor-Filter (Der perfekte Inventar-Blocker)
                     contours, _ = cv2.findContours(screen_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     top_right_margin_x = int(sw * 0.08)
-                    top_right_margin_y = int(sh * 0.08)
+                    # Toleranz leicht auf 12% belassen für die tiefere Minimap im MP
+                    top_right_margin_y = int(sh * 0.12)
 
                     anchor_letters = 0
                     if contours:
@@ -153,12 +150,9 @@ class ZoneWatcher:
                                     anchor_letters += 1
 
                     if anchor_letters < 2:
-                        # Breiter Text (z.B. "INVENTAR") ist da, aber die Minimap-Ecke ist leer.
-                        # -> Inventar/Menü ist offen! Gedächtnis behalten.
                         time.sleep(1.0)
                         continue
 
-                    # --- Ab hier: Karte ist zu 100% offen und wir können Zonen checken ---
                     best_zone = "Unbekannt"
                     highest_score = 0.0
 

@@ -21,22 +21,23 @@ class ZoneCaptureMixin:
         if self.is_capturing_zone: return
         self.inline_capture_expanded = True
 
-        # Verstecke den Fragezeichen-Button
         self.btn_capture_zone.pack_forget()
-
-        # Kürze den Text, um Platz für das Eingabefeld in derselben Zeile zu machen
         self.lbl_zone.configure(text="📍 Zone:", text_color="#00ccff")
 
-        # Manuelles Eingabefeld anzeigen
         self.manual_zone_entry.pack(side="left", padx=(5, 2))
         self.btn_manual_capture.pack(side="left")
 
-        # Act-Buttons in der Zeile darunter anzeigen (nutzt den vorhandenen Platz im Fenster)
+        # NEU: Elegante Checkbox, um dem Skript zu sagen, wo der Zonen-Name steht!
+        if not hasattr(self, "cb_has_gamename"):
+            self.has_gamename_var = ctk.BooleanVar(value=True)  # Standard: An (Online)
+            self.cb_has_gamename = ctk.CTkCheckBox(self.zone_top_frame, text="Mit Spielname?",
+                                                   variable=self.has_gamename_var,
+                                                   font=("Roboto", 11), checkbox_width=16, checkbox_height=16)
+        self.cb_has_gamename.pack(side="left", padx=(5, 0))
+
         self.selection_container.pack(pady=(2, 0), anchor="center")
         self.zone_dropdown.pack_forget()
         self.act_btn_frame.pack(anchor="center")
-
-        # KEINE GEOMETRIE-ÄNDERUNGEN MEHR! Das Fenster bleibt starr.
 
     def show_zone_dropdown(self, act_name):
         zones = get_zones_for_act(act_name)
@@ -51,7 +52,6 @@ class ZoneCaptureMixin:
         self.zone_dropdown.pack(anchor="center")
 
     def start_manual_capture(self):
-        """Startet die Aufnahme über das manuell eingetippte Feld."""
         zone_name = self.manual_zone_entry.get().strip()
         if not zone_name:
             self.close_inline_capture()
@@ -61,7 +61,6 @@ class ZoneCaptureMixin:
         self._initiate_capture(zone_name)
 
     def start_inline_capture_dropdown(self, zone_name):
-        """Startet die Aufnahme über das Dropdown-Menü."""
         if zone_name == "- Abbrechen -" or zone_name == "Gebiet wählen..." or zone_name == "Keine Daten":
             self.close_inline_capture()
             return
@@ -72,35 +71,38 @@ class ZoneCaptureMixin:
         self.is_capturing_zone = True
         self.inline_capture_expanded = False
 
-        # Alle UI-Elemente der Zonen-Auswahl wieder verstecken
         self.selection_container.pack_forget()
         self.zone_dropdown.pack_forget()
         self.manual_zone_entry.pack_forget()
         self.btn_manual_capture.pack_forget()
 
-        # Den Button zum Anzeigen des Status wieder einblenden
+        # Checkbox wieder verstecken
+        if hasattr(self, "cb_has_gamename"):
+            self.cb_has_gamename.pack_forget()
+
         self.btn_capture_zone.pack(side="left", padx=(5, 0))
-        threading.Thread(target=self._headless_capture_logic, args=(zone_name,), daemon=True).start()
+
+        # Den Zustand der Checkbox an die Hintergrund-Logik übergeben
+        has_name = self.has_gamename_var.get() if hasattr(self, "has_gamename_var") else False
+        threading.Thread(target=self._headless_capture_logic, args=(zone_name, has_name), daemon=True).start()
 
     def close_inline_capture(self):
         self.inline_capture_expanded = False
 
-        # UI aufräumen
         self.selection_container.pack_forget()
         self.act_btn_frame.pack_forget()
         self.zone_dropdown.pack_forget()
         self.manual_zone_entry.pack_forget()
         self.btn_manual_capture.pack_forget()
 
-        # Originalzustand wiederherstellen
+        if hasattr(self, "cb_has_gamename"):
+            self.cb_has_gamename.pack_forget()
+
         self.lbl_zone.configure(text="📍 Zone: Unbekannt")
         self.btn_capture_zone.pack(side="left", padx=(5, 0))
         self.last_zone_check = ""
 
-        # KEINE GEOMETRIE-ÄNDERUNGEN MEHR!
-
-    def _headless_capture_logic(self, zone_name):
-        # Visuellen Text-Timer entfernt. Nur die Farbe signalisiert den Countdown (Orange).
+    def _headless_capture_logic(self, zone_name, has_gamename=False):
         if self.winfo_exists():
             self.btn_capture_zone.configure(fg_color="#FF9500", text_color="black", state="disabled")
 
@@ -110,7 +112,6 @@ class ZoneCaptureMixin:
             time.sleep(0.9)
 
         if not self.winfo_exists(): return
-        # Farbe auf Rot setzen für Aufnahme.
         self.btn_capture_zone.configure(fg_color="#cf222e", text_color="white")
 
         try:
@@ -119,7 +120,7 @@ class ZoneCaptureMixin:
             x1 = int(sw * 0.75)
             y1 = int(sh * 0.0)
             x2 = sw
-            y2 = int(sh * 0.15)
+            y2 = int(sh * 0.25)  # Wir bleiben bei 25%, damit alle Zeilen erfasst werden
 
             min_width_threshold = int(sw * 0.055)
             clean_name = zone_name.replace(" ", "_")
@@ -140,6 +141,7 @@ class ZoneCaptureMixin:
                     screen_bgr = np.array(sct_img)[:, :, :3]
 
                 gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+                # Wieder auf saubere 180 gesetzt! Ignoriert das Map-Rauschen komplett.
                 _, mask_uint8 = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
 
                 kernel = np.ones((3, 40), np.uint8)
@@ -153,12 +155,19 @@ class ZoneCaptureMixin:
                         if rw > 20 and rh > 8:
                             rects.append((rx, ry, rw, rh))
 
-                    rects.sort(key=lambda r: r[1])
+                    valid_rects = [r for r in rects if r[2] > min_width_threshold]
                     best_rect = None
-                    for r in rects:
-                        if r[2] > min_width_threshold:
-                            best_rect = r
-                            break
+                    if valid_rects:
+                        # Sortiert von oben nach unten (anhand der Y-Achse)
+                        valid_rects.sort(key=lambda r: r[1])
+
+                        # EXAKT DEINE LOGIK:
+                        if has_gamename and len(valid_rects) > 1:
+                            # Mit Spielname -> Nimm die 2. Zeile
+                            best_rect = valid_rects[1]
+                        else:
+                            # Ohne Spielname -> Nimm die 1. Zeile
+                            best_rect = valid_rects[0]
 
                     if best_rect:
                         bx, by, bw, bh = best_rect
@@ -194,12 +203,11 @@ class ZoneCaptureMixin:
         time.sleep(2)
         self.is_capturing_zone = False
 
-        if self.winfo_exists() and not self.inline_capture_expanded:
+        if self.winfo_exists() and not getattr(self, "inline_capture_expanded", False):
             self.btn_capture_zone.pack_forget()
-            # Setze den Button optisch sauber zurück
             self.btn_capture_zone.configure(text="?", state="normal", fg_color="#444444")
             self.last_zone_check = ""
 
     def reload_zone_templates(self):
-        if self.zone_watcher:
+        if hasattr(self, "zone_watcher") and self.zone_watcher:
             self.zone_watcher._load_templates()
