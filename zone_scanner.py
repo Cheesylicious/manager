@@ -11,12 +11,14 @@ TEMPLATE_FOLDER = "zones_filter"
 
 
 class ZoneWatcher:
-    def __init__(self, config_data):
+    # ui_parent hinzugefügt, um auf das gebundene Fenster des Overlays zugreifen zu können
+    def __init__(self, config_data, ui_parent=None):
         self.running = False
         self.thread = None
         self.stop_event = threading.Event()
         self.config = config_data
         self.current_zone = "Unbekannt"
+        self.ui_parent = ui_parent
 
         self.templates = []
         self._load_templates()
@@ -99,6 +101,15 @@ class ZoneWatcher:
         with mss.mss() as sct:
             while not self.stop_event.is_set():
                 try:
+                    # --- MULTIBOXING PERFORMANCE CHECK ---
+                    # Pausiert den Zonen-Scanner sofort, wenn das falsche Diablo-Fenster im Vordergrund ist
+                    if self.ui_parent and hasattr(self.ui_parent, "bound_hwnd") and self.ui_parent.bound_hwnd is not None:
+                        current_hwnd = windll.user32.GetForegroundWindow()
+                        if current_hwnd != self.ui_parent.bound_hwnd:
+                            time.sleep(0.5)
+                            continue
+                    # ---------------------------------------
+
                     if not self.templates:
                         time.sleep(2)
                         continue
@@ -178,9 +189,6 @@ class ZoneWatcher:
                                 highest_score = score
                                 best_zone = name
 
-                    # Da wir durch unsere Filter sicher sind, dass es sich um die Karte handelt,
-                    # können wir unbekannte Zonen auch wieder sicher als "Unbekannt" ausgeben.
-                    # Das triggert dann im Overlay sofort das "?" zum Neuanlegen!
                     self.current_zone = best_zone
                     time.sleep(1.0)
 

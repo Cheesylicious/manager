@@ -153,12 +153,17 @@ class DropWatcher:
         pt = POINT()
         windll.user32.GetCursorPos(byref(pt))
 
-        left_zone = sw * 0.35
-        right_zone = sw * 0.65
+        # Truhe (links) und Inventar (rechts) teilen den Bildschirm fast exakt in der Mitte (50%)
+        is_mouse_left = pt.x < (sw / 2)
+        is_match_left = match_x < (sw / 2)
 
-        if (pt.x < left_zone and match_x < left_zone) or (pt.x > right_zone and match_x > right_zone):
-            if abs(pt.x - match_x) < 450 and abs(pt.y - match_y) < 550:
+        # Wenn die Maus und der gefundene Text auf derselben Bildschirmhälfte sind,
+        # handelt es sich beim Hovern um einen Tooltip aus der Truhe oder dem Inventar.
+        if is_mouse_left == is_match_left:
+            # Großzügige Box um die Maus, da die Beschreibungen in D2R sehr groß sein können
+            if abs(pt.x - match_x) < 550 and abs(pt.y - match_y) < 650:
                 return True
+
         return False
 
     def _instant_click(self, x, y, sw, sh):
@@ -328,6 +333,16 @@ class DropWatcher:
             while not self.stop_event.is_set():
                 if self.active:
                     try:
+                        # --- MULTIBOXING PERFORMANCE CHECK ---
+                        # Pausiert den Scanner sofort, wenn das falsche Diablo-Fenster im Vordergrund ist
+                        if self.ui_parent and hasattr(self.ui_parent,
+                                                      "bound_hwnd") and self.ui_parent.bound_hwnd is not None:
+                            current_hwnd = windll.user32.GetForegroundWindow()
+                            if current_hwnd != self.ui_parent.bound_hwnd:
+                                time.sleep(0.5)
+                                continue
+                        # ---------------------------------------
+
                         now = time.time()
                         auto_pickup_on = self.config.get("auto_pickup", False)
 

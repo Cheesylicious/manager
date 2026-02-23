@@ -33,7 +33,7 @@ class PotionLogicMixin:
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             if not hwnd: return False
 
-            # Berücksichtigung des Multiboxing-Bindings (aus WindowStateMixin / TrackerOverlay)
+            # Berücksichtigung des Multiboxing-Bindings
             if getattr(self, "bound_hwnd", None) is not None:
                 return hwnd == self.bound_hwnd
 
@@ -43,7 +43,6 @@ class PotionLogicMixin:
             ctypes.windll.user32.GetWindowTextW(hwnd, buff, length + 1)
 
             if "Diablo" in buff.value:
-                # Falls noch nicht gebunden, binde an dieses Fenster
                 self.bound_hwnd = hwnd
                 return True
             return False
@@ -65,6 +64,10 @@ class PotionLogicMixin:
                 self.sensors_ui[key]["status"].configure(text=f"LOW [{assigned_key}]", text_color="#FF3333")
 
     def _logic_loop(self):
+        # Initialisierung der Multiboxing-Timer Variablen
+        self.is_tabbed_out = False
+        self.tabbed_out_at = 0
+
         while not self.stop_event.is_set():
             ctrl = ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000
             alt = ctypes.windll.user32.GetAsyncKeyState(0x12) & 0x8000
@@ -75,10 +78,17 @@ class PotionLogicMixin:
             if self.paused: time.sleep(0.5); continue
 
             try:
-                # Prüfen, ob das gebundene Fenster im Fokus ist
                 is_active_window = self._is_d2r_foreground()
 
                 if is_active_window:
+                    # MULTIBOXING TIMER LOGIC: Wir sind zurück im gebundenen Spiel
+                    if self.is_tabbed_out:
+                        self.is_tabbed_out = False
+                        if getattr(self, "in_game", False) and self.tabbed_out_at > 0:
+                            time_away = time.time() - self.tabbed_out_at
+                            self.start_time += time_away  # Verschiebt den Startpunkt um die Abwesenheit
+                            self.tabbed_out_at = 0
+
                     is_char = self._eval_state("char_sel_1", "char_sel_2")
                     is_lobby = self._eval_state("lobby_1", "lobby_2")
                     is_game = self._eval_state("game_static")
@@ -165,7 +175,12 @@ class PotionLogicMixin:
                             self.btn_capture_zone.pack_forget()
                         self.last_zone_check = ""
                 else:
-                    # Nicht im gebundenen Spiel = Pause
+                    # MULTIBOXING TIMER LOGIC: Wir tabben raus
+                    if not self.is_tabbed_out:
+                        self.is_tabbed_out = True
+                        if getattr(self, "in_game", False):
+                            self.tabbed_out_at = time.time()
+
                     self.lbl_status.configure(text="TABBED OUT (Auto-Pot PAUSE)", text_color="#FF9500")
 
                     if not self.is_capturing_zone:
@@ -187,7 +202,6 @@ class PotionLogicMixin:
     def _check_color(self, cfg, mode="match"):
         if not cfg: return False, (0, 0, 0)
 
-        # Kompatibilität für Listen (z.B. loading_screen)
         if isinstance(cfg, list):
             if len(cfg) == 0: return False, (0, 0, 0)
             matches = 0
@@ -198,19 +212,15 @@ class PotionLogicMixin:
                 last_color = c
             return (matches > 0 and matches >= (len(cfg) / 2)), last_color
 
-        # Wenn es sich um ein ausgeschnittenes Bild handelt (Template)
         if isinstance(cfg, dict) and cfg.get("is_template"):
             return self._check_template(cfg)
 
-        # Fallback auf einzelnen Pixel
         return self._check_single_pixel(cfg, mode)
 
     def _check_template(self, cfg):
-        """Innovatives, extrem ressourcenschonendes Template Matching für Zustände."""
         try:
             template_path = cfg.get("template_path")
 
-            # Pfad auflösen (Absolut machen, falls relativ)
             if not os.path.isabs(template_path):
                 if getattr(sys, 'frozen', False):
                     base_path = os.path.dirname(sys.executable)
@@ -229,8 +239,6 @@ class PotionLogicMixin:
             if x2 <= x1 or y2 <= y1:
                 return False, (0, 0, 0)
 
-            # Wir grabben nicht den ganzen Bildschirm (Monolith/Performance-Fresser),
-            # sondern nur exakt den Bereich + 10 Pixel Toleranzrand! (Regel 2)
             pad = 10
             top = max(0, y1 - pad)
             left = max(0, x1 - pad)
@@ -245,7 +253,6 @@ class PotionLogicMixin:
             res = cv2.matchTemplate(screen_bgr, tmpl, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv2.minMaxLoc(res)
 
-            # Bei einer Übereinstimmung von über 85% gehen wir davon aus, dass wir im Menü sind
             if max_val >= 0.85:
                 return True, (cfg.get("r", 0), cfg.get("g", 0), cfg.get("b", 0))
 

@@ -155,7 +155,9 @@ class RunManagerMixin:
 
     def update_timer_gui(self):
         if self.monitoring and not self.stop_event.is_set():
-            if self.in_game and self.start_time > 0 and not self.paused:
+            # INNOVATION: Timer wird nur aktualisiert, wenn wir NICHT rausgetabbt sind.
+            # Dadurch friert die Zeitanzeige für das Auge perfekt ein!
+            if self.in_game and self.start_time > 0 and not self.paused and not getattr(self, "is_tabbed_out", False):
                 dur = time.time() - self.start_time
                 self.lbl_timer.configure(text=f"{int(dur // 60):02}:{int(dur % 60):02}.{int((dur % 1) * 100):02}")
             self.after(50, self.update_timer_gui)
