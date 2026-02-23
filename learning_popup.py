@@ -11,6 +11,9 @@ class LearningPopup(ctk.CTkToplevel):
         Ein Overlay-Popup, das rechts am Haupt-Overlay haftet.
         """
         super().__init__(parent)
+
+        # Speichere die explizite Referenz auf das Haupt-Overlay
+        self.parent_overlay = parent
         self.rune_name = rune_name
         self.icon_image = icon_image
         self.folder_path = folder_path
@@ -60,19 +63,29 @@ class LearningPopup(ctk.CTkToplevel):
                                     fg_color="#cf222e", hover_color="#a40e26", command=self.destroy)
         self.btn_no.pack(side="left", padx=2)
 
-        # Positionierung rechts vom Haupt-Overlay
+        # Positionierung sofort starten und Ghosting anwenden
         self.after(10, self._position_relative_to_parent)
         self.after(100, self.apply_stealth_mode)
 
     def _position_relative_to_parent(self):
-        """Platziert das Popup exakt rechts neben dem Parent-Fenster."""
+        """Platziert das Popup exakt rechts neben dem Parent-Fenster und klebt daran fest."""
         try:
-            px = self.master.winfo_x()
-            py = self.master.winfo_y()
-            pw = self.master.winfo_width()
-            # 5 Pixel Abstand zum Haupt-Overlay
-            self.geometry(f"+{px + pw + 5}+{py}")
-        except:
+            # Nutze die explizite Referenz anstatt self.master
+            if self.winfo_exists() and hasattr(self, 'parent_overlay') and self.parent_overlay.winfo_exists():
+                px = self.parent_overlay.winfo_x()
+                py = self.parent_overlay.winfo_y()
+                pw = self.parent_overlay.winfo_width()
+
+                # 5 Pixel Abstand zum Haupt-Overlay
+                target_x = px + pw + 5
+                target_y = py
+
+                self.geometry(f"+{target_x}+{target_y}")
+
+                # Wiederhole den Aufruf, damit das Popup wie magnetisch am Haupt-Overlay klebt,
+                # falls das Haupt-Overlay mit der Maus verschoben wird.
+                self.after(20, self._position_relative_to_parent)
+        except Exception:
             pass
 
     def apply_stealth_mode(self):
@@ -86,6 +99,11 @@ class LearningPopup(ctk.CTkToplevel):
         """Gibt die Rune zurück an das Overlay zur späteren Bearbeitung."""
         if self.later_callback:
             self.later_callback(self.rune_name)
+        # NEU: Falls der Callback vom Scanner nicht durchgereicht wurde,
+        # rufen wir die neue Funktion im Haupt-Overlay direkt und zwingend auf.
+        elif hasattr(self, 'parent_overlay') and hasattr(self.parent_overlay, 'add_pending_rune'):
+            self.parent_overlay.add_pending_rune(self.rune_name)
+
         self.destroy()
 
     def save_icon(self):

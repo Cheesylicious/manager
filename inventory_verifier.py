@@ -13,7 +13,13 @@ class InventoryVerifier:
         self.sw = ctypes.windll.user32.GetSystemMetrics(0)
         self.sh = ctypes.windll.user32.GetSystemMetrics(1)
 
-        self.icon_folder = "runes_inventory"
+        # INNOVATION: Absolute Pfadnutzung, um Diskrepanzen zwischen Speichern und Lesen zu verhindern
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+
+        self.icon_folder = os.path.join(base_path, "runes_inventory")
         self._ensure_folder()
 
         # Region des Inventar-Grids (Standard D2R Position rechts)

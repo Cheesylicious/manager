@@ -1,5 +1,5 @@
 import customtkinter as ctk
-
+import ctypes
 
 class RuneFilterWindow(ctk.CTkToplevel):
     def __init__(self, parent, config_data, callback):
@@ -47,6 +47,18 @@ class RuneFilterWindow(ctk.CTkToplevel):
 
             # Schönes Grid-Layout (4 Spalten)
             cb.grid(row=i // 4, column=i % 4, padx=15, pady=8, sticky="w")
+
+        # Stealth Mode aktivieren
+        self.after(200, self.apply_stealth_mode)
+
+    def apply_stealth_mode(self):
+        """Macht das Fenster für OBS und Screen-Captures (Warden) unsichtbar."""
+        try:
+            WDA_EXCLUDEFROMCAPTURE = 0x0011
+            hwnd = int(self.wm_frame(), 16)
+            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        except Exception:
+            pass
 
     def select_all(self):
         for var in self.vars.values():
