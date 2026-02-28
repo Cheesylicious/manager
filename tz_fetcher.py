@@ -1,21 +1,23 @@
 import threading
 import time
-import re
+import urllib.request
+import json
+import urllib.error
 
-try:
-    import cloudscraper
-except ImportError:
-    cloudscraper = None
+# =========================================================
+# D2RUNEWIZARD API TOKEN
+# https://d2runewizard.com/profile/api
+# =========================================================
+API_TOKEN = "T41jagcO0UcTLKJiC5UOmDCdGtS2"
 
 
 class TZFetcher:
-    def __init__(self, stop_event, update_interval=300):
+    def __init__(self, stop_event, update_interval=60):
         self.update_interval = update_interval
         self.stop_event = stop_event
-        self.next_tz_info = "Warte auf Daten..."
+        self.next_tz = "Lade..."
         self.thread = None
         self.callback = None
-        self.scraper = cloudscraper.create_scraper() if cloudscraper else None
 
     def start(self, callback):
         self.callback = callback
@@ -26,59 +28,59 @@ class TZFetcher:
         pass
 
     def _fetch_loop(self):
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36',
+            'D2R-Contact': 'admin@d2r-manager.local',
+            'D2R-Platform': 'Desktop Overlay App',
+            'D2R-Repo': 'https://github.com/cheesylicious/manager'
+        }
+
         while not self.stop_event.is_set():
-            if not self.scraper:
-                self.next_tz_info = "Fehler: cloudscraper Modul fehlt"
-                if self.callback: self.callback(self.next_tz_info)
-                time.sleep(10)
-                continue
-
-            tz_result = None
-            try:
-                # Wir rufen jetzt die offizielle Tracker-Seite von diablo2.io auf
-                # Diese Seite enthält die RotW-Daten ohne harte Verschlüsselung
-                response = self.scraper.get('https://diablo2.io/tracker/', timeout=15)
-
-                if response.status_code == 200:
-                    tz_result = self._parse_diablo2io(response.text)
-            except Exception:
-                pass
-
-            # Fallback
-            if not tz_result:
+            if not API_TOKEN or API_TOKEN == "DEIN_TOKEN_HIER":
+                self.next_tz = "API Token fehlt!"
+            else:
                 try:
-                    resp = self.scraper.get('https://d2runewizard.com/api/terror-zone', timeout=5)
-                    if resp.status_code == 200:
-                        nxt = resp.json().get('nextTerrorZone', {})
-                        tz_result = f"Vanilla: {nxt.get('name') if isinstance(nxt, dict) else nxt}"
-                except:
-                    pass
+                    url = f'https://d2runewizard.com/api/terror-zone?token={API_TOKEN}'
+                    req = urllib.request.Request(url, headers=headers)
 
-            self.next_tz_info = tz_result if tz_result else "Warte auf Update..."
+                    with urllib.request.urlopen(req, timeout=10) as response:
+                        data = json.loads(response.read().decode('utf-8'))
+
+                        # LOGIK-ÄNDERUNG: Wir priorisieren jetzt die VORHERSAGE
+                        # damit wir nicht auf langsame User-Reports angewiesen sind.
+
+                        zone = ""
+
+                        # 1. Versuche das Feld 'next' (Die nächste geplante Zone laut API)
+                        next_obj = data.get('next', {})
+                        if next_obj and isinstance(next_obj, dict):
+                            zone = next_obj.get('name', '')
+
+                        # 2. Falls 'next' leer ist, schaue in die 'highestProbabilityZone'
+                        if not zone:
+                            prob_zone = data.get('terrorZone', {}).get('highestProbabilityZone', {})
+                            if isinstance(prob_zone, dict):
+                                zone = prob_zone.get('zone', '')
+
+                        # 3. Letzter Versuch: Die aktuelle Zone (falls wir wissen wollen, was JETZT ist)
+                        if not zone:
+                            current_zone = data.get('terrorZone', {}).get('currentZone', '')
+                            if current_zone:
+                                zone = f"Jetzt: {current_zone}"
+
+                        if zone:
+                            # "The " entfernen und Namen kürzen für das Overlay
+                            self.next_tz = str(zone).replace("The ", "").strip()
+                        else:
+                            self.next_tz = "Suche Zone..."
+
+                except Exception:
+                    self.next_tz = "Verbindung..."
 
             if self.callback:
-                self.callback(self.next_tz_info)
+                self.callback({"next": self.next_tz})
 
+            # Kurzes Intervall für schnellere Updates bei Zonenwechsel
             for _ in range(self.update_interval):
                 if self.stop_event.is_set(): break
                 time.sleep(1)
-
-    def _parse_diablo2io(self, html):
-        """Liest die Terrorzonen direkt aus dem diablo2.io Quellcode."""
-
-        # Suchen nach dem Block, der "Next Terror Zone" beschreibt
-        match = re.search(r'Next Terror Zone:.*?class="zone-name[^>]*>([^<]+)</span>', html, re.IGNORECASE | re.DOTALL)
-
-        if match:
-            zone = match.group(1).strip()
-            # Reinigen von überflüssigen Umbrüchen oder HTML-Resten
-            zone = re.sub(r'\s+', ' ', zone)
-            if len(zone) > 3:
-                return zone
-
-        # Alternative Suche, falls die Struktur leicht abweicht
-        alt_match = re.search(r'Upcoming.*?<span class="tz-loc">([^<]+)</span>', html, re.IGNORECASE | re.DOTALL)
-        if alt_match:
-            return alt_match.group(1).strip()
-
-        return None

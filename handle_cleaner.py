@@ -150,9 +150,6 @@ def main():
         print("Target not running.")
         return
 
-    target_pid = pids[0]
-    print(f"Target PID: {target_pid}")
-
     buf = get_system_handles()
     if not buf:
         print("Failed to read mapping.")
@@ -164,43 +161,46 @@ def main():
     except: count = 0
     if not isinstance(count, int): count = count.value
 
-    print(f"Verifying {count} objects...")
+    print(f"Verifying {count} objects across {len(pids)} process(es)...")
 
     handle_base = ctypes.addressof(sys_info.contents.Handles)
     stride = ctypes.sizeof(SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX)
     found_matches = 0
     current_proc_handle = HANDLE(-1)
 
-    for i in range(count):
-        entry_ptr = handle_base + (i * stride)
-        entry = SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX.from_address(entry_ptr)
+    # Iteriere nun innovativ durch alle gefundenen PIDs
+    for target_pid in pids:
+        print(f"Checking PID: {target_pid}")
+        for i in range(count):
+            entry_ptr = handle_base + (i * stride)
+            entry = SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX.from_address(entry_ptr)
 
-        if entry.UniqueProcessId == target_pid:
-            h_proc = kernel32.OpenProcess(PROCESS_DUP_HANDLE, False, entry.UniqueProcessId)
-            if h_proc:
-                dup_h = HANDLE()
-                status = kernel32.DuplicateHandle(
-                    h_proc, HANDLE(entry.HandleValue), current_proc_handle, ctypes.byref(dup_h), 0, False, DUPLICATE_SAME_ACCESS
-                )
-                if status:
-                    name_buf = ctypes.create_string_buffer(4096)
-                    if (ntdll.NtQueryObject(dup_h, ObjectNameInformation, name_buf, 4096, None) & 0xffffffff) == 0:
-                        name_info = ctypes.cast(name_buf, ctypes.POINTER(PUBLIC_OBJECT_NAME_INFORMATION))
-                        if name_info.contents.Name.Buffer and name_info.contents.Name.Length > 0:
-                            raw = ctypes.string_at(name_info.contents.Name.Buffer, name_info.contents.Name.Length)
-                            try:
-                                name_str = raw.decode('utf-16le').lower()
-                                if SEARCH_STRING in name_str:
-                                    print(f" -> FOUND: Mutex identified.")
-                                    kill_h = HANDLE()
-                                    if kernel32.DuplicateHandle(h_proc, HANDLE(entry.HandleValue), current_proc_handle,
-                                                                ctypes.byref(kill_h), 0, False, DUPLICATE_CLOSE_SOURCE):
-                                        print("    [SUCCESS] Handle terminated.")
-                                        kernel32.CloseHandle(kill_h)
-                                        found_matches += 1
-                            except: pass
-                    kernel32.CloseHandle(dup_h)
-                kernel32.CloseHandle(h_proc)
+            if entry.UniqueProcessId == target_pid:
+                h_proc = kernel32.OpenProcess(PROCESS_DUP_HANDLE, False, entry.UniqueProcessId)
+                if h_proc:
+                    dup_h = HANDLE()
+                    status = kernel32.DuplicateHandle(
+                        h_proc, HANDLE(entry.HandleValue), current_proc_handle, ctypes.byref(dup_h), 0, False, DUPLICATE_SAME_ACCESS
+                    )
+                    if status:
+                        name_buf = ctypes.create_string_buffer(4096)
+                        if (ntdll.NtQueryObject(dup_h, ObjectNameInformation, name_buf, 4096, None) & 0xffffffff) == 0:
+                            name_info = ctypes.cast(name_buf, ctypes.POINTER(PUBLIC_OBJECT_NAME_INFORMATION))
+                            if name_info.contents.Name.Buffer and name_info.contents.Name.Length > 0:
+                                raw = ctypes.string_at(name_info.contents.Name.Buffer, name_info.contents.Name.Length)
+                                try:
+                                    name_str = raw.decode('utf-16le').lower()
+                                    if SEARCH_STRING in name_str:
+                                        print(f" -> FOUND: Mutex identified for PID {target_pid}.")
+                                        kill_h = HANDLE()
+                                        if kernel32.DuplicateHandle(h_proc, HANDLE(entry.HandleValue), current_proc_handle,
+                                                                    ctypes.byref(kill_h), 0, False, DUPLICATE_CLOSE_SOURCE):
+                                            print("    [SUCCESS] Handle terminated.")
+                                            kernel32.CloseHandle(kill_h)
+                                            found_matches += 1
+                                except: pass
+                        kernel32.CloseHandle(dup_h)
+                    kernel32.CloseHandle(h_proc)
 
     if found_matches > 0: print(f"\nDone! {found_matches} locks removed.")
     else: print("\nNo matching object found.")

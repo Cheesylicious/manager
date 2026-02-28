@@ -120,15 +120,46 @@ class RuneSnippingTool(ctk.CTkToplevel):
         if not os.path.exists(self.folder_path):
             try:
                 os.makedirs(self.folder_path)
-            except:
+            except Exception:
                 pass
 
         filename = f"{self.rune_name.lower()}.png"
         save_path = os.path.join(self.folder_path, filename)
 
         try:
+            # --- INNOVATION: Feature 4 - Template-Erosion (Auto-Masking) ---
+            # 1. Bild in Graustufen umwandeln
             gray_img = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2GRAY)
-            cv2.imwrite(save_path, gray_img)
+
+            # 2. Leichtes Weichzeichnen, um Rauschen im Inventar-Hintergrund zu glätten
+            blurred = cv2.GaussianBlur(gray_img, (5, 5), 0)
+
+            # 3. Otsu-Thresholding: Berechnet automatisch den perfekten Schwellenwert,
+            # um helle Objekte (Rune) vom dunklen Hintergrund (Inventar) zu trennen
+            _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+            # 4. Finde alle Konturen im maskierten Bereich
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            if contours:
+                # Wir gehen davon aus, dass die Rune das größte zusammenhängende Objekt im Ausschnitt ist
+                largest_contour = max(contours, key=cv2.contourArea)
+
+                # Erstelle eine komplett schwarze Maske
+                mask = np.zeros_like(gray_img)
+
+                # Zeichne die gefundene Rune als weiße, gefüllte Fläche auf die Maske
+                cv2.drawContours(mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
+
+                # 5. Schneide den Hintergrund mit der Maske weg ("Herausschmelzen")
+                # Alles, was nicht zur Rune gehört, wird zu 100% reinem Schwarz
+                final_img = cv2.bitwise_and(gray_img, gray_img, mask=mask)
+            else:
+                # Fallback: Falls der Nutzer etwas Ungewöhnliches ausschneidet
+                final_img = gray_img
+            # ---------------------------------------------------------------
+
+            cv2.imwrite(save_path, final_img)
 
             if self.success_callback:
                 self.success_callback(self.rune_name)

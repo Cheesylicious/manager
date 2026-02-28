@@ -68,7 +68,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.current_run_drops = []
         self.pending_runes = []
 
-        # NEU: Speichert das Fenster für Multiboxing
         self.bound_hwnd = None
 
         self.drop_watcher = DropWatcher(config_data, drop_callback=self.on_drop_detected,
@@ -88,9 +87,9 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.last_zone_check = ""
         self.blink_state = False
 
-        # Startet den Fetcher für die nächste TZ
+        # Startet den Fetcher für die Terrorzonen
         self.tz_fetcher = TZFetcher(self.stop_event)
-        self.tz_fetcher.start(self.update_next_tz_ui)
+        self.tz_fetcher.start(self.update_tz_ui)
 
         self.after(200, self.apply_stealth_mode)
         self.after(1000, self._blink_loop)
@@ -122,9 +121,8 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.zone_wrapper = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.zone_wrapper.pack(fill="x", pady=(0, 2))
 
-        # Zeile 1: Label, Capture-Button und Textfeld zentriert
         self.zone_top_frame = ctk.CTkFrame(self.zone_wrapper, fg_color="transparent")
-        self.zone_top_frame.pack(anchor="center")  # Hält das Modul in der Mitte
+        self.zone_top_frame.pack(anchor="center")
 
         self.lbl_zone = ctk.CTkLabel(self.zone_top_frame, text="📍 Zone: Unbekannt", font=("Roboto", 12, "bold"),
                                      text_color="#00ccff")
@@ -140,7 +138,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                                                 hover_color="#238636", font=("Roboto", 11, "bold"),
                                                 command=self.start_manual_capture)
 
-        # Zeile 2: Act-Buttons & Dropdown zentriert
         self.selection_container = ctk.CTkFrame(self.zone_wrapper, fg_color="transparent")
         self.act_btn_frame = ctk.CTkFrame(self.selection_container, fg_color="transparent")
 
@@ -154,13 +151,18 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.zone_dropdown = ctk.CTkOptionMenu(self.selection_container, variable=self.dropdown_var,
                                                values=["Wähle..."], width=130, height=22, font=("Roboto", 11),
                                                command=self.start_inline_capture_dropdown)
-        # ----------------------
 
-        # NEU: Label für nächste Terrorzone
-        self.lbl_next_tz = ctk.CTkLabel(self.zone_wrapper, text="🔮 Nächste TZ: Lade...", font=("Roboto", 11, "bold"),
-                                        text_color="#aa88ff")
+        # --- INNOVATION: Terrorzonen-Block (Nur Nächste) ---
+        self.tz_display_frame = ctk.CTkFrame(self.zone_wrapper, fg_color="#111111", corner_radius=6, border_width=1,
+                                             border_color="#333333")
+
+        self.lbl_next_tz = ctk.CTkLabel(self.tz_display_frame, text="🔮 Nächste TZ: Lade...",
+                                        font=("Roboto", 11, "bold"), text_color="#aa88ff")
+        self.lbl_next_tz.pack(pady=4, padx=5)
+
         if self.config_data.get("show_next_tz", True):
-            self.lbl_next_tz.pack(pady=(2, 2))
+            self.tz_display_frame.pack(pady=(5, 2), fill="x", padx=10)
+        # ---------------------------------------------------
 
         self.is_capturing_zone = False
         self.inline_capture_expanded = False
@@ -269,7 +271,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.resizer.bind("<ButtonRelease-1>", self.resize_end)
 
         self.context_menu = tk.Menu(self, tearoff=0, bg="#2b2b2b", fg="white")
-        # NEU: Binding Button im Menü!
         self.context_menu.add_command(label="🔗 An aktuelles Spiel binden", command=self.bind_to_active_window)
         self.context_menu.add_command(label="⏸️ Pause", command=self.toggle_pause)
         self.context_menu.add_command(label="👻 Ghost-Modus (EIN/AUS per Strg+Alt+G)",
@@ -286,9 +287,11 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
             w.bind("<Button-3>", self.show_context_menu)
         self.x = self.y = 0
 
-    def update_next_tz_ui(self, text):
+    def update_tz_ui(self, tz_data):
+        """Aktualisiert die Terrorzonen-Labels threadsicher (verhindert Engine-Abstürze)."""
         if self.winfo_exists() and hasattr(self, "lbl_next_tz"):
-            self.lbl_next_tz.configure(text=f"🔮 Nächste TZ: {text}")
+            new_text = f"🔮 Nächste TZ: {tz_data.get('next', 'Unbekannt')}"
+            self.after(0, lambda: self.lbl_next_tz.configure(text=new_text))
 
     def reload_config(self):
         self.hp_key = self.config_data.get("hp_key", "Aus")
@@ -305,6 +308,13 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
             for key in ["hp", "mana", "merc"]:
                 sound_on = self.config_data.get(f"{key}_sound", True)
                 self.sensors_ui[key]["sound"].configure(text="🔊" if sound_on else "🔇")
+
+        # Ein- und Ausblenden des TZ-Blocks je nach Checkbox in der Config
+        if hasattr(self, "tz_display_frame"):
+            if self.config_data.get("show_next_tz", True):
+                self.tz_display_frame.pack(pady=(5, 2), fill="x", padx=10)
+            else:
+                self.tz_display_frame.pack_forget()
 
     def toggle_individual_sound(self, key):
         current = self.config_data.get(f"{key}_sound", True)
