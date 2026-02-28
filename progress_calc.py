@@ -6,10 +6,15 @@ from PIL import ImageGrab
 class XPWatcher:
     def __init__(self, config_data):
         self.config = config_data
+        self.reset()
+
+    def reset(self):
+        """Setzt alle Session-Daten zurück."""
         self.session_start_xp = None
         self.session_start_time = None
         self.current_xp = 0.0
         self.current_xph = "0.0"
+        self.history_xph = []  # Für gleitenden Durchschnitt
 
     def get_current_xp_percent(self):
         start = self.config.get("xp_start")
@@ -23,8 +28,8 @@ class XPWatcher:
             y1, y2 = sorted([int(start["y"]), int(end["y"])])
 
             y_mid = (y1 + y2) // 2
-
-            bbox = (x1, max(0, y_mid - 3), x2, y_mid + 4)
+            # Kleinerer vertikaler Scanbereich für mehr Performance
+            bbox = (x1, max(0, y_mid - 2), x2, y_mid + 2)
             img = ImageGrab.grab(bbox=bbox)
             pixels = img.load()
             width, height = img.size
@@ -32,30 +37,23 @@ class XPWatcher:
             if width < 10: return self.current_xp, self.current_xph
 
             last_filled_x = 0
-            consecutive_empty = 0
             found_any_gold = False
 
+            # Präziserer Scan der Gold-Pixel der XP-Leiste
             for x in range(width):
                 is_filled = False
-
                 for y in range(height):
                     r, g, b = pixels[x, y]
-
-                    if r > 80 and g > 70 and (int(r) - int(b)) > 20 and (int(g) - int(b)) > 15:
+                    # Optimierte Farberkennung für die XP-Leiste
+                    if r > 90 and g > 75 and (int(r) - int(b)) > 25:
                         is_filled = True
                         found_any_gold = True
                         break
-
                 if is_filled:
                     last_filled_x = x
-                    consecutive_empty = 0
-                else:
-                    consecutive_empty += 1
-
-                if consecutive_empty > 25:
+                elif found_any_gold and x > last_filled_x + 5:  # Lücke gefunden
                     break
 
-            # ANTI-BLACKOUT SCHUTZ
             if not found_any_gold and self.current_xp > 5.0:
                 return self.current_xp, self.current_xph
 
@@ -70,10 +68,16 @@ class XPWatcher:
                 gained = self.current_xp - self.session_start_xp
                 elapsed_sec = time.time() - self.session_start_time
 
-                # OPTIMIERT: Zeigt jetzt schon nach 5 Sekunden (statt 30) die ersten EXP/h Werte an!
                 if gained > 0 and elapsed_sec > 5:
                     per_sec = gained / elapsed_sec
-                    self.current_xph = str(round(per_sec * 3600, 1))
+                    instant_xph = per_sec * 3600
+
+                    # Moving Average über die letzten 5 Messungen für Stabilität
+                    self.history_xph.append(instant_xph)
+                    if len(self.history_xph) > 5: self.history_xph.pop(0)
+
+                    avg_xph = sum(self.history_xph) / len(self.history_xph)
+                    self.current_xph = str(round(avg_xph, 1))
 
             return self.current_xp, self.current_xph
 
@@ -87,22 +91,20 @@ class XPWatcher:
 
         gained = self.current_xp - self.session_start_xp
 
-        # Reset falls Spieler in Hell stirbt und EXP verliert
-        if gained < 0:
+        if gained < 0:  # Tod-Schutz
             self.session_start_xp = self.current_xp
             self.session_start_time = time.time()
             self.current_xph = "0.0"
-            return "Tod! Reset."
+            return "Reset"
 
-        if gained <= 0.01:
-            return "Warte..."
+        if gained <= 0.005:
+            return "..."
 
         avg_per_run = gained / session_run_count
         remaining_xp = 100.0 - self.current_xp
 
         if avg_per_run > 0:
             runs_needed = math.ceil(remaining_xp / avg_per_run)
-            if runs_needed > 9999: return "> 9k"
-            return str(runs_needed)
+            return str(runs_needed) if runs_needed <= 9999 else ">9k"
 
         return "--"

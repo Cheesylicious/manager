@@ -113,29 +113,29 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.content_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         self.content_frame.pack(side="left", fill="both", expand=True, padx=5, pady=5)
 
-        self.lbl_status = ctk.CTkLabel(self.content_frame, text="WARTEN...", font=("Roboto", 10, "bold"),
+        self.lbl_status = ctk.CTkLabel(self.content_frame, text="WARTEN...", font=("Roboto", 9, "bold"),
                                        text_color="#888888")
-        self.lbl_status.pack()
+        self.lbl_status.pack(pady=0)
 
         # ---- ZONE WRAPPER ----
         self.zone_wrapper = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-        self.zone_wrapper.pack(fill="x", pady=(0, 2))
+        self.zone_wrapper.pack(fill="x", pady=(0, 1))
 
         self.zone_top_frame = ctk.CTkFrame(self.zone_wrapper, fg_color="transparent")
         self.zone_top_frame.pack(anchor="center")
 
-        self.lbl_zone = ctk.CTkLabel(self.zone_top_frame, text="📍 Zone: Unbekannt", font=("Roboto", 12, "bold"),
+        self.lbl_zone = ctk.CTkLabel(self.zone_top_frame, text="📍 Zone: Unbekannt", font=("Roboto", 11, "bold"),
                                      text_color="#00ccff")
         self.lbl_zone.pack(side="left")
 
-        self.btn_capture_zone = ctk.CTkButton(self.zone_top_frame, text="?", width=22, height=20, fg_color="#444444",
-                                              hover_color="#1f538d", font=("Roboto", 11, "bold"),
+        self.btn_capture_zone = ctk.CTkButton(self.zone_top_frame, text="?", width=20, height=18, fg_color="#444444",
+                                              hover_color="#1f538d", font=("Roboto", 10, "bold"),
                                               command=self.open_inline_capture)
 
-        self.manual_zone_entry = ctk.CTkEntry(self.zone_top_frame, width=95, height=20, font=("Roboto", 11),
-                                              placeholder_text="Name eingeben")
-        self.btn_manual_capture = ctk.CTkButton(self.zone_top_frame, text="OK", width=26, height=20, fg_color="#2da44e",
-                                                hover_color="#238636", font=("Roboto", 11, "bold"),
+        self.manual_zone_entry = ctk.CTkEntry(self.zone_top_frame, width=95, height=18, font=("Roboto", 10),
+                                              placeholder_text="Name")
+        self.btn_manual_capture = ctk.CTkButton(self.zone_top_frame, text="OK", width=24, height=18, fg_color="#2da44e",
+                                                hover_color="#238636", font=("Roboto", 10, "bold"),
                                                 command=self.start_manual_capture)
 
         self.selection_container = ctk.CTkFrame(self.zone_wrapper, fg_color="transparent")
@@ -152,24 +152,20 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                                                values=["Wähle..."], width=130, height=22, font=("Roboto", 11),
                                                command=self.start_inline_capture_dropdown)
 
-        # --- INNOVATION: Terrorzonen-Block (Nur Nächste) ---
+        # --- INNOVATION: Terrorzonen-Block ---
         self.tz_display_frame = ctk.CTkFrame(self.zone_wrapper, fg_color="#111111", corner_radius=6, border_width=1,
                                              border_color="#333333")
 
-        self.lbl_next_tz = ctk.CTkLabel(self.tz_display_frame, text="🔮 Nächste TZ: Lade...",
-                                        font=("Roboto", 11, "bold"), text_color="#aa88ff")
-        self.lbl_next_tz.pack(pady=4, padx=5)
+        self.lbl_next_tz = ctk.CTkLabel(self.tz_display_frame, text="🔮 TZ: Lade...",
+                                        font=("Roboto", 10, "bold"), text_color="#aa88ff")
+        self.lbl_next_tz.pack(pady=2, padx=5)
 
         if self.config_data.get("show_next_tz", True):
-            self.tz_display_frame.pack(pady=(5, 2), fill="x", padx=10)
-        # ---------------------------------------------------
+            self.tz_display_frame.pack(pady=(2, 1), fill="x", padx=15)
 
-        self.is_capturing_zone = False
-        self.inline_capture_expanded = False
-
-        self.lbl_live_loot = ctk.CTkLabel(self.content_frame, text="", font=("Roboto", 11, "bold"),
+        self.lbl_live_loot = ctk.CTkLabel(self.content_frame, text="", font=("Roboto", 10, "bold"),
                                           text_color="#FFD700")
-        self.lbl_live_loot.pack(pady=(0, 2))
+        self.lbl_live_loot.pack(pady=0)
 
         self.pending_var = ctk.StringVar(value="📸 Runen nachtragen")
         self.pending_dropdown = ctk.CTkOptionMenu(self.content_frame, variable=self.pending_var, values=[], width=160,
@@ -177,62 +173,65 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                                                   button_color="#1a4577", command=self.process_selected_pending_rune)
 
         self.timer_container = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-        self.timer_container.pack(pady=(0, 2))
+        self.timer_container.pack(pady=0)
 
         self.lbl_timer = ctk.CTkLabel(self.timer_container, text="00:00.00",
-                                      font=("Roboto Mono", int(self.current_width * 0.11), "bold"),
+                                      font=("Roboto Mono", int(self.current_width * 0.10), "bold"),
                                       text_color="#FFD700", cursor="hand2")
-        self.lbl_timer.pack(side="left", padx=(10, 5))
+        self.lbl_timer.pack(side="left", padx=(5, 2))
         self.lbl_timer.bind("<Button-1>", self.toggle_history)
 
-        self.btn_toggle_expand = ctk.CTkButton(self.timer_container, text="▼", width=24, height=24,
-                                               fg_color="transparent", hover_color="#333333", font=("Arial", 14),
+        self.btn_toggle_expand = ctk.CTkButton(self.timer_container, text="▼", width=20, height=20,
+                                               fg_color="transparent", hover_color="#333333", font=("Arial", 12),
                                                command=self.toggle_history)
         self.btn_toggle_expand.pack(side="left")
 
-        self.lbl_xp = ctk.CTkLabel(self.content_frame, text="EXP: --% | --%/h | RUNS: --", font=("Roboto Mono", 11),
-                                   text_color="#ffd700")
+        # KOMPAKTER EXP-BLOCK
+        self.lbl_xp = ctk.CTkLabel(self.content_frame, text="XP: --% | --%/h | Next: --",
+                                   font=("Roboto Mono", 10, "bold"), text_color="#ffd700", cursor="hand2")
+        self.lbl_xp.bind("<Button-3>", self.reset_xp_stats)
+
         if self.config_data.get("xp_active"):
-            self.lbl_xp.pack()
+            self.lbl_xp.pack(pady=(0, 2))
 
         self.stats_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-        self.stats_frame.pack(fill="x", padx=5)
-        self.lbl_runs = ctk.CTkLabel(self.stats_frame, text="Runs: 0", font=("Roboto", 11), text_color="#cccccc")
+        self.stats_frame.pack(fill="x", padx=10)
+        self.lbl_runs = ctk.CTkLabel(self.stats_frame, text="RUN 0", font=("Roboto", 10, "bold"), text_color="#cccccc")
         self.lbl_runs.pack(side="left")
-        self.lbl_last = ctk.CTkLabel(self.stats_frame, text="Letzter: --:--", font=("Roboto", 11), text_color="#888888")
+        self.lbl_last = ctk.CTkLabel(self.stats_frame, text="LAST --:--", font=("Roboto", 10), text_color="#888888")
         self.lbl_last.pack(side="right")
 
         self.avg_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-        self.avg_frame.pack(fill="x", padx=5)
-        self.lbl_avg = ctk.CTkLabel(self.avg_frame, text="Ø --:--", font=("Roboto", 11, "bold"), text_color="#00ccff")
+        self.avg_frame.pack(fill="x", padx=10)
+        self.lbl_avg = ctk.CTkLabel(self.avg_frame, text="Ø --:--", font=("Roboto", 10, "bold"), text_color="#00ccff")
         self.lbl_avg.pack(side="right")
 
         self.guardian_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-        self.guardian_frame.pack(fill="x", padx=5, pady=(2, 5), side="bottom")
+        self.guardian_frame.pack(fill="x", padx=5, pady=(2, 2), side="bottom")
 
         self.sensors_ui = {}
-        sensor_configs = [("hp", "❤️ LP", "#FF3333"), ("mana", "💧 MP", "#00ccff"), ("merc", "🛡️ SÖLD", "#2da44e")]
+        sensor_configs = [("hp", "LP", "#FF3333"), ("mana", "MP", "#00ccff"), ("merc", "SÖL", "#2da44e")]
 
         for key, title, color in sensor_configs:
             f = ctk.CTkFrame(self.guardian_frame, fg_color="#151515", corner_radius=6)
-            f.pack(side="left", fill="both", expand=True, padx=2)
+            f.pack(side="left", fill="both", expand=True, padx=1)
 
             top_f = ctk.CTkFrame(f, fg_color="transparent")
-            top_f.pack(fill="x", padx=4, pady=(4, 0))
+            top_f.pack(fill="x", padx=2, pady=(2, 0))
 
-            indicator = ctk.CTkFrame(top_f, width=12, height=12, corner_radius=6, fg_color="#000000")
-            indicator.pack(side="left", padx=(0, 4))
+            indicator = ctk.CTkFrame(top_f, width=8, height=8, corner_radius=4, fg_color="#000000")
+            indicator.pack(side="left", padx=(0, 2))
 
-            lbl_title = ctk.CTkLabel(top_f, text=title, font=("Roboto", 11, "bold"), text_color=color)
+            lbl_title = ctk.CTkLabel(top_f, text=title, font=("Roboto", 9, "bold"), text_color=color)
             lbl_title.pack(side="left")
 
-            btn_sound = ctk.CTkButton(top_f, text="🔊" if self.config_data.get(f"{key}_sound", True) else "🔇", width=20,
-                                      height=20, fg_color="transparent", hover_color="#333333",
+            btn_sound = ctk.CTkButton(top_f, text="🔊" if self.config_data.get(f"{key}_sound", True) else "🔇", width=16,
+                                      height=16, fg_color="transparent", hover_color="#333333", font=("Arial", 8),
                                       command=lambda k=key: self.toggle_individual_sound(k))
             btn_sound.pack(side="right")
 
-            lbl_status = ctk.CTkLabel(f, text="AUS", font=("Roboto Mono", 10, "bold"), text_color="#555555")
-            lbl_status.pack(pady=(0, 4))
+            lbl_status = ctk.CTkLabel(f, text="OFF", font=("Roboto Mono", 8, "bold"), text_color="#555555")
+            lbl_status.pack(pady=(0, 2))
 
             self.sensors_ui[key] = {"title": lbl_title, "status": lbl_status, "sound": btn_sound, "color": color,
                                     "indicator": indicator}
@@ -273,9 +272,10 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.context_menu = tk.Menu(self, tearoff=0, bg="#2b2b2b", fg="white")
         self.context_menu.add_command(label="🔗 An aktuelles Spiel binden", command=self.bind_to_active_window)
         self.context_menu.add_command(label="⏸️ Pause", command=self.toggle_pause)
-        self.context_menu.add_command(label="👻 Ghost-Modus (EIN/AUS per Strg+Alt+G)",
-                                      command=lambda: self.set_clickthrough(True))
+        self.context_menu.add_command(label="👻 Ghost-Modus (Strg+Alt+G)", command=lambda: self.set_clickthrough(True))
         self.context_menu.add_command(label="🔄 Run-Timer zurücksetzen", command=self.reset_current_run)
+        # NEU: Eintrag im Dropdown-Menü
+        self.context_menu.add_command(label="📈 EXP-Statistik zurücksetzen", command=self.reset_xp_stats)
         self.context_menu.add_command(label="🗑️ Alle Daten zurücksetzen", command=self.reset_session)
         self.context_menu.add_command(label="❌ Beenden", command=self.stop_tracking)
 
@@ -290,7 +290,7 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
     def update_tz_ui(self, tz_data):
         """Aktualisiert die Terrorzonen-Labels threadsicher (verhindert Engine-Abstürze)."""
         if self.winfo_exists() and hasattr(self, "lbl_next_tz"):
-            new_text = f"🔮 Nächste TZ: {tz_data.get('next', 'Unbekannt')}"
+            new_text = f"🔮 TZ: {tz_data.get('next', 'Unbekannt')}"
             self.after(0, lambda: self.lbl_next_tz.configure(text=new_text))
 
     def reload_config(self):
@@ -312,7 +312,7 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         # Ein- und Ausblenden des TZ-Blocks je nach Checkbox in der Config
         if hasattr(self, "tz_display_frame"):
             if self.config_data.get("show_next_tz", True):
-                self.tz_display_frame.pack(pady=(5, 2), fill="x", padx=10)
+                self.tz_display_frame.pack(pady=(2, 1), fill="x", padx=15)
             else:
                 self.tz_display_frame.pack_forget()
 
@@ -326,6 +326,23 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
 
         if self.configurator:
             self.configurator.sync_ui()
+
+    def reset_xp_stats(self, event=None):
+        """Wird per Rechtsklick auf die EXP-Anzeige oder über das Menü aufgerufen."""
+        if self.xp_watcher:
+            self.xp_watcher.reset()
+            winsound.Beep(800, 50)
+            self.lbl_xp.configure(text="XP: RESET...", text_color="#ffffff")
+            self.after(500, lambda: self.lbl_xp.configure(text_color="#ffd700"))
+            self._update_xp_display(do_scan=True)
+
+    def _update_xp_display(self, do_scan=True):
+        if not self.config_data.get("xp_active") or not self.xp_watcher: return
+
+        if do_scan:
+            perc, xph = self.xp_watcher.get_current_xp_percent()
+            runs_left = self.xp_watcher.estimate_runs_to_level(self.run_count)
+            self.lbl_xp.configure(text=f"XP: {perc}% | {xph}/h | Next: {runs_left}")
 
     def _blink_loop(self):
         """Lässt 'Unbekannt' rot/blau blinken, wenn keine Zonenaufnahme aktiv ist."""
