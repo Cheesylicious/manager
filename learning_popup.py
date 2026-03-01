@@ -6,6 +6,7 @@ import time
 import sys
 import winsound
 from PIL import Image
+from overlay_config import TrackerConfig
 
 # INNOVATION: KI Engine für den selbstlernenden Prozess einbinden
 try:
@@ -15,7 +16,7 @@ except ImportError:
 
 
 class LearningPopup(ctk.CTkToplevel):
-    def __init__(self, parent, rune_name, icon_image, folder_path, success_callback, later_callback=None):
+    def __init__(self, parent, rune_name, icon_image, folder_path, success_callback, later_callback=None, confidence=0.85):
         """
         Ein Overlay-Popup, das rechts am Haupt-Overlay haftet.
         """
@@ -28,6 +29,7 @@ class LearningPopup(ctk.CTkToplevel):
         self.folder_path = folder_path
         self.success_callback = success_callback
         self.later_callback = later_callback
+        self.confidence = confidence
 
         # KI-Engine initialisieren
         self.ai_engine = AIEngine() if AIEngine else None
@@ -49,7 +51,14 @@ class LearningPopup(ctk.CTkToplevel):
         # UI Layout
         self.lbl_title = ctk.CTkLabel(self, text=f"Rune erkannt:\n{rune_name.upper()}",
                                       font=("Roboto", 14, "bold"), text_color="#FFD700")
-        self.lbl_title.pack(pady=(10, 5), padx=10)
+        self.lbl_title.pack(pady=(10, 2), padx=10)
+
+        # NEU: Score Anzeige mit dynamischer Farbe
+        score_pct = int(self.confidence * 100)
+        color = "#2da44e" if score_pct >= 85 else "#d97706" if score_pct >= 70 else "#cf222e"
+        self.lbl_score = ctk.CTkLabel(self, text=f"KI-Konfidenz: {score_pct}%",
+                                      font=("Roboto", 11, "bold"), text_color=color)
+        self.lbl_score.pack(pady=(0, 5))
 
         if self.icon_image is not None:
             rgb_image = cv2.cvtColor(self.icon_image, cv2.COLOR_BGR2RGB)
@@ -58,6 +67,13 @@ class LearningPopup(ctk.CTkToplevel):
             self.ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(64, 64))
             self.lbl_img = ctk.CTkLabel(self, text="", image=self.ctk_img)
             self.lbl_img.pack(pady=5)
+
+        # NEU: Kontrollkästchen für zukünftiges Auto-Akzeptieren
+        self.auto_verify_var = ctk.BooleanVar(value=False)
+        self.cb_auto = ctk.CTkCheckBox(self, text="Dauerhaft ausblenden\n(Zukünftig auto-akzeptieren)",
+                                       variable=self.auto_verify_var, font=("Roboto", 10),
+                                       checkbox_width=16, checkbox_height=16)
+        self.cb_auto.pack(pady=(0, 10))
 
         # Standard-Buttons Frame
         self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -104,6 +120,7 @@ class LearningPopup(ctk.CTkToplevel):
     def show_false_positive_options(self):
         """Versteckt die normalen Buttons und zeigt die Fehler-Kategorien."""
         self.btn_frame.pack_forget()
+        self.cb_auto.pack_forget()
         self.lbl_title.configure(text="Grund der Falschmeldung:")
         self.fp_frame.pack(fill="x", pady=5)
 
@@ -111,10 +128,10 @@ class LearningPopup(ctk.CTkToplevel):
         """Kehrt zum normalen Menü zurück."""
         self.fp_frame.pack_forget()
         self.lbl_title.configure(text=f"Rune erkannt:\n{self.rune_name.upper()}")
+        self.cb_auto.pack(pady=(0, 10))
         self.btn_frame.pack(fill="x", padx=10, pady=5)
 
     def save_false_positive(self, reason):
-        """Speichert das erkannte Bild als Negativ-Beispiel für den Scanner ab und meldet es der KI."""
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
@@ -134,22 +151,18 @@ class LearningPopup(ctk.CTkToplevel):
 
         try:
             if self.icon_image is not None:
-                # Das Original-Farbbild speichern, um später bessere Analysen zu ermöglichen
                 cv2.imwrite(save_path, self.icon_image)
         except Exception as e:
-            print(f"[LearningPopup] Fehler beim Speichern der Falschmeldung: {e}")
+            print(f"[LearningPopup] Fehler beim Speichern: {e}")
 
-        # --- NEU: KI Integration ---
+        # KI Integration
         if self.ai_engine:
-            # KI über Fehler informieren, um Schwellenwerte anzupassen
-            self.ai_engine.report_false_positive(self.rune_name, 0.85)
-
+            self.ai_engine.report_false_positive(self.rune_name, self.confidence)
             try:
                 winsound.Beep(500, 150)
             except Exception:
                 pass
 
-            # Feedback an das Haupt-Overlay senden
             if hasattr(self.parent_overlay, 'lbl_live_loot'):
                 try:
                     msg = f"KI lernt: {self.rune_name} Bild geblockt"
@@ -158,27 +171,18 @@ class LearningPopup(ctk.CTkToplevel):
                     self.parent_overlay.lbl_live_loot.configure(text=msg, text_color="#ffaa00")
                 except Exception:
                     pass
-        # ---------------------------
 
         self.destroy()
 
     def _position_relative_to_parent(self):
-        """Platziert das Popup exakt rechts neben dem Parent-Fenster und klebt daran fest."""
         try:
-            # Nutze die explizite Referenz anstatt self.master
             if self.winfo_exists() and hasattr(self, 'parent_overlay') and self.parent_overlay.winfo_exists():
                 px = self.parent_overlay.winfo_x()
                 py = self.parent_overlay.winfo_y()
                 pw = self.parent_overlay.winfo_width()
-
-                # 5 Pixel Abstand zum Haupt-Overlay
                 target_x = px + pw + 5
                 target_y = py
-
                 self.geometry(f"+{target_x}+{target_y}")
-
-                # Wiederhole den Aufruf, damit das Popup wie magnetisch am Haupt-Overlay klebt,
-                # falls das Haupt-Overlay mit der Maus verschoben wird.
                 self.after(20, self._position_relative_to_parent)
         except Exception:
             pass
@@ -191,17 +195,22 @@ class LearningPopup(ctk.CTkToplevel):
             pass
 
     def mark_later(self):
-        """Gibt die Rune zurück an das Overlay zur späteren Bearbeitung."""
         if self.later_callback:
             self.later_callback(self.rune_name)
-        # Falls der Callback vom Scanner nicht durchgereicht wurde,
-        # rufen wir die neue Funktion im Haupt-Overlay direkt und zwingend auf.
         elif hasattr(self, 'parent_overlay') and hasattr(self.parent_overlay, 'add_pending_rune'):
             self.parent_overlay.add_pending_rune(self.rune_name)
-
         self.destroy()
 
     def save_icon(self):
+        # NEU: Speichern der Auto-Verify Entscheidung
+        if self.auto_verify_var.get():
+            cfg = TrackerConfig.load()
+            if "auto_verify" not in cfg:
+                cfg["auto_verify"] = []
+            if self.rune_name not in cfg["auto_verify"]:
+                cfg["auto_verify"].append(self.rune_name)
+                TrackerConfig.save(cfg)
+
         if not os.path.exists(self.folder_path):
             try:
                 os.makedirs(self.folder_path)

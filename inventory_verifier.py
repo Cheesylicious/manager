@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import math
+import re
 
 
 class InventoryVerifier:
@@ -13,7 +14,6 @@ class InventoryVerifier:
         self.sw = ctypes.windll.user32.GetSystemMetrics(0)
         self.sh = ctypes.windll.user32.GetSystemMetrics(1)
 
-        # INNOVATION: Absolute Pfadnutzung, um Diskrepanzen zwischen Speichern und Lesen zu verhindern
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
@@ -22,7 +22,6 @@ class InventoryVerifier:
         self.icon_folder = os.path.join(base_path, "runes_inventory")
         self._ensure_folder()
 
-        # Region des Inventar-Grids (Standard D2R Position rechts)
         self.grid_region = {
             "top": int(self.sh * 0.55),
             "left": int(self.sw * 0.66),
@@ -38,6 +37,8 @@ class InventoryVerifier:
         self.inventory_templates = {}
         self.inventory_baseline = {}
         self.last_baseline_time = 0
+
+        self.last_best_matches = {}
 
         self._load_inventory_icons()
 
@@ -64,17 +65,21 @@ class InventoryVerifier:
             os.makedirs(self.icon_folder, exist_ok=True)
 
     def _load_inventory_icons(self):
-        """Lädt alle Icons und bereitet sie für den Vergleich vor."""
         self.inventory_templates = {}
         if not os.path.exists(self.icon_folder):
             return
         for f in os.listdir(self.icon_folder):
             if f.lower().endswith(('.png', '.jpg', '.bmp')):
+                raw_name = f.split('.')[0]
+                base_name = re.split(r'_', raw_name)[0].title()
+
+                if base_name not in self.inventory_templates:
+                    self.inventory_templates[base_name] = []
+
                 path = os.path.join(self.icon_folder, f)
                 img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
                 if img is not None:
-                    # Wir wenden die gleiche Vorbehandlung wie auf das Live-Bild an
-                    self.inventory_templates[f.split('.')[0].title()] = self._preprocess_image(img)
+                    self.inventory_templates[base_name].append(self._preprocess_image(img))
 
     def get_mouse_pos(self):
         class POINT(ctypes.Structure):
@@ -104,7 +109,6 @@ class InventoryVerifier:
 
             has_text = any(cv2.boundingRect(cnt)[2] > 50 for cnt in contours)
 
-            # FIX: Overflow verhindern durch explizite Konvertierung der uint8-Werte in Integer
             bg_pixel = img[2, 2]
             bg_sum = int(bg_pixel[0]) + int(bg_pixel[1]) + int(bg_pixel[2])
             bg_is_dark = bg_sum < 450
@@ -112,15 +116,12 @@ class InventoryVerifier:
             return has_text and bg_is_dark
 
     def _preprocess_image(self, img_gray):
-        """Schärft das Bild und gleicht die Helligkeit an."""
-        # Auf vollen Kontrastbereich dehnen
         img_norm = cv2.normalize(img_gray, None, 0, 255, cv2.NORM_MINMAX)
-        # CLAHE (Adaptive Histogramm-Egalisierung) macht Gravuren sichtbar
+        _, thresh = cv2.threshold(img_norm, 50, 255, cv2.THRESH_TOZERO)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        return clahe.apply(img_norm)
+        return clahe.apply(thresh)
 
     def update_baseline(self, force_reset_item=None):
-        """Aktualisiert den Zählerstand der Runen im Inventar."""
         self._load_inventory_icons()
 
         if force_reset_item:
@@ -132,42 +133,66 @@ class InventoryVerifier:
             inv_gray = cv2.cvtColor(np.array(sct_img)[:, :, :3], cv2.COLOR_BGR2GRAY)
             inv_clean = self._preprocess_image(inv_gray)
 
-        for name, tmpl in self.inventory_templates.items():
-            self.inventory_baseline[name] = self._count_template_in_image(tmpl, inv_clean)
+        for name, tmpl_list in self.inventory_templates.items():
+            res = self._count_template_in_image(tmpl_list, inv_clean)
+            count = res[0] if isinstance(res, tuple) else res
+            self.inventory_baseline[name] = count
 
-    def _count_template_in_image(self, tmpl, inv_img):
-        """Zählt, wie oft eine Rune im Inventar zu sehen ist."""
-        # 10% Rand vom Template abschneiden (ignoriert unsaubere Snipping-Ränder)
-        th, tw = tmpl.shape
-        cy, cx = max(1, int(th * 0.10)), max(1, int(tw * 0.10))
-        tmpl_core = tmpl[cy:-cy, cx:-cx] if th > 2 * cy and tw > 2 * cx else tmpl
+    def _count_template_in_image(self, tmpl_list, inv_img):
+        best_pts = []
+        best_max_val = 0.0
+        best_max_loc = None
+        best_cx, best_cy, best_th, best_tw = 0, 0, 0, 0
 
-        # Template Matching mit reduzierter Toleranz für schwierige Hintergründe
-        res = cv2.matchTemplate(inv_img, tmpl_core, cv2.TM_CCOEFF_NORMED)
-        # Schwellenwert leicht gesenkt, um die 0.32er Matches aus deinen Logs zu erfassen
-        loc = np.where(res >= 0.38)
+        for tmpl in tmpl_list:
+            th, tw = tmpl.shape
+            cy, cx = max(1, int(th * 0.25)), max(1, int(tw * 0.25))
+            tmpl_core = tmpl[cy:-cy, cx:-cx] if th > 2 * cy and tw > 2 * cx else tmpl
 
-        pts = []
-        for pt in zip(*loc[::-1]):
-            # Dubletten im selben Slot vermeiden
-            if not any(math.hypot(pt[0] - p[0], pt[1] - p[1]) < 20 for p in pts):
-                pts.append(pt)
+            res = cv2.matchTemplate(inv_img, tmpl_core, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-        if len(pts) > 0:
-            return len(pts)
+            # Immer den besten Wert für die Anzeige speichern
+            if max_val > best_max_val:
+                best_max_val = max_val
+                best_max_loc = max_loc
+                best_cx, best_cy, best_th, best_tw = cx, cy, th, tw
 
-        # Fallback: Kanten-Erkennung (Canny), falls das normale Bild zu verwaschen ist
-        edges_inv = cv2.Canny(inv_img, 50, 150)
-        edges_tmpl = cv2.Canny(tmpl_core, 50, 150)
-        res_e = cv2.matchTemplate(edges_inv, edges_tmpl, cv2.TM_CCOEFF_NORMED)
-        loc_e = np.where(res_e >= 0.15)
+            loc = np.where(res >= 0.32)
+            for pt in zip(*loc[::-1]):
+                if not any(math.hypot(pt[0] - p[0], pt[1] - p[1]) < 20 for p in best_pts):
+                    best_pts.append(pt)
 
-        pts_e = []
-        for pt in zip(*loc_e[::-1]):
-            if not any(math.hypot(pt[0] - p[0], pt[1] - p[1]) < 20 for p in pts_e):
-                pts_e.append(pt)
+        if len(best_pts) > 0:
+            return len(best_pts), best_max_val, best_max_loc, best_cx, best_cy, best_th, best_tw
 
-        return len(pts_e)
+        # Canny Fallback
+        best_pts_e = []
+        best_max_val_e = 0.0
+
+        for tmpl in tmpl_list:
+            th, tw = tmpl.shape
+            cy, cx = max(1, int(th * 0.25)), max(1, int(tw * 0.25))
+            tmpl_core = tmpl[cy:-cy, cx:-cx] if th > 2 * cy and tw > 2 * cx else tmpl
+
+            edges_inv = cv2.Canny(inv_img, 50, 150)
+            edges_tmpl = cv2.Canny(tmpl_core, 50, 150)
+            res_e = cv2.matchTemplate(edges_inv, edges_tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val_e, _, max_loc_e = cv2.minMaxLoc(res_e)
+
+            if max_val_e > best_max_val_e:
+                best_max_val_e = max_val_e
+
+            loc_e = np.where(res_e >= 0.12)
+            for pt in zip(*loc_e[::-1]):
+                if not any(math.hypot(pt[0] - p[0], pt[1] - p[1]) < 20 for p in best_pts_e):
+                    best_pts_e.append(pt)
+
+        if len(best_pts_e) > 0:
+            return len(best_pts_e), best_max_val_e, best_max_loc, best_cx, best_cy, best_th, best_tw
+
+        # Wenn beides nicht den Schwellenwert knackt, geben wir trotzdem das Bild mit dem besten Score zurück
+        return 0, best_max_val, best_max_loc, best_cx, best_cy, best_th, best_tw
 
     def get_hovered_slot_icon(self):
         mx, my = self.get_mouse_pos()
@@ -205,27 +230,74 @@ class InventoryVerifier:
         return icon_bgr
 
     def verify_item_in_inventory(self, item_name):
-        """Hauptprüfung: Hat sich die Anzahl der Rune seit dem Aufheben erhöht?"""
         self._load_inventory_icons()
         if item_name not in self.inventory_templates:
-            return False
+            return False, 0.0
 
         with mss.mss() as sct:
             try:
                 sct_img = sct.grab(self.grid_region)
-                inv_gray = cv2.cvtColor(np.array(sct_img)[:, :, :3], cv2.COLOR_BGR2GRAY)
+                inv_bgr = np.array(sct_img)[:, :, :3]
+                inv_gray = cv2.cvtColor(inv_bgr, cv2.COLOR_BGR2GRAY)
                 inv_clean = self._preprocess_image(inv_gray)
 
-                current_count = self._count_template_in_image(self.inventory_templates[item_name], inv_clean)
+                res = self._count_template_in_image(self.inventory_templates[item_name], inv_clean)
+                current_count = res[0] if isinstance(res, tuple) else res
+                best_score = res[1] if isinstance(res, tuple) else 0.0
+                max_loc = res[2] if isinstance(res, tuple) and len(res) > 2 else None
+                cx = res[3] if isinstance(res, tuple) and len(res) > 3 else 0
+                cy = res[4] if isinstance(res, tuple) and len(res) > 4 else 0
+                th = res[5] if isinstance(res, tuple) and len(res) > 5 else 0
+                tw = res[6] if isinstance(res, tuple) and len(res) > 6 else 0
+
+                if max_loc is not None and th > 0 and tw > 0:
+                    x_full = max(0, max_loc[0] - cx)
+                    y_full = max(0, max_loc[1] - cy)
+                    crop = inv_gray[y_full:y_full + th, x_full:x_full + tw]
+
+                    if crop.shape[0] == th and crop.shape[1] == tw:
+                        self.last_best_matches[item_name] = crop
+
                 old_count = self.inventory_baseline.get(item_name, 0)
 
-                self.log_debug(f"Check {item_name}: Baseline {old_count} -> Aktuell {current_count}")
+                self.log_debug(
+                    f"Check {item_name}: Baseline {old_count} -> Aktuell {current_count} (Score: {best_score:.2f})")
 
                 if current_count > old_count:
-                    # Erfolg! Rune gefunden, Baseline wird für das nächste Mal angepasst
                     self.inventory_baseline[item_name] = current_count
-                    return True
-                return False
+                    return True, best_score
+
+                return False, best_score
             except Exception as e:
                 self.log_debug(f"Fehler bei Verifizierung: {e}")
-                return False
+                return False, 0.0
+
+    def learn_confirmed_icon(self, item_name, inv_score):
+        """Speichert das Bild nur, wenn der Score hoch genug war, um Falschmeldungen (z.B. Würfel) zu vermeiden."""
+
+        # SICHERHEITS-NETZ: Alles unter 55% ist Müll und wird nicht gelernt!
+        if inv_score < 0.55:
+            self.log_debug(
+                f"[{item_name}] Score zu niedrig ({inv_score:.2f}). Ignoriere Bild, um falsche Items zu vermeiden.")
+            return
+
+        if hasattr(self, 'last_best_matches') and item_name in self.last_best_matches:
+            new_icon = self.last_best_matches[item_name]
+
+            existing = [f for f in os.listdir(self.icon_folder) if f.lower().startswith(item_name.lower())]
+
+            if len(existing) < 3:
+                new_idx = len(existing) + 1
+            else:
+                import random
+                new_idx = random.randint(1, 3)
+
+            filename = f"{item_name.lower()}_{new_idx}.png"
+            save_path = os.path.join(self.icon_folder, filename)
+
+            try:
+                cv2.imwrite(save_path, new_icon)
+                self.log_debug(f"[{item_name}] Neues, hochwertiges Icon gelernt und gespeichert.")
+                self._load_inventory_icons()
+            except Exception as e:
+                self.log_debug(f"Fehler beim Speichern: {e}")

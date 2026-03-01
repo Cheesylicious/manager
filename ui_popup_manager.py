@@ -1,23 +1,23 @@
 import customtkinter as ctk
 
 
-class LootFilterWindow(ctk.CTkToplevel):
+class PopupManagerWindow(ctk.CTkToplevel):
     """
-    Ein eigenständiges Pop-up-Fenster für "Overlay & Tracker", das alle angelernten
-    Items auflistet und Kontrollkästchen zum (De-)Aktivieren des Auto-Loots bietet.
+    Verwaltet alle Items/Runen, bei denen der Nutzer angeklickt hat,
+    dass sie in Zukunft automatisch akzeptiert (nicht mehr gefragt) werden sollen.
     """
 
-    def __init__(self, parent_widget, db_manager, on_close_callback=None):
+    def __init__(self, parent_widget, config_data, on_close_callback=None):
         super().__init__(parent_widget)
 
-        self.db_manager = db_manager
+        self.config_data = config_data
         self.on_close_callback = on_close_callback
         self.checkboxes = {}
 
-        self.title("Angelernte Items / Loot-Filter")
-        self.geometry("400x500")
+        self.title("Stummgeschaltete Pop-ups")
+        self.geometry("400x450")
         self.attributes('-topmost', True)
-        self.grab_set()  # Blockiert das Hauptfenster, bis dieses geschlossen wird
+        self.grab_set()
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
@@ -27,67 +27,58 @@ class LootFilterWindow(ctk.CTkToplevel):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Header
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 10))
 
         ctk.CTkLabel(
             header_frame,
-            text="Eigener Loot-Filter",
-            font=("Roboto", 20, "bold"),
-            text_color="#FFD700"
+            text="Automatisch akzeptierte Items",
+            font=("Roboto", 18, "bold"),
+            text_color="#8B008B"
         ).pack(anchor="w")
 
         ctk.CTkLabel(
             header_frame,
-            text="Wähle aus, welche angelernten Items in Zukunft\nautomatisch aufgesammelt werden sollen.",
+            text="Entferne den Haken, wenn du bei diesen Items wieder\nein Bestätigungs-Popup der KI sehen möchtest.",
             font=("Roboto", 12),
             text_color="#aaaaaa",
             justify="left"
         ).pack(anchor="w", pady=(5, 0))
 
-        # Scrollbarer Bereich für die Items
         self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="#1a1a1a", corner_radius=8)
         self.scroll_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=5)
 
         self.refresh_item_list()
 
-        # Schließen Button
         btn_close = ctk.CTkButton(
-            self,
-            text="Schließen",
-            command=self._on_closing,
-            fg_color="#333333",
-            hover_color="#444444"
+            self, text="Speichern & Schließen", command=self._on_closing,
+            fg_color="#333333", hover_color="#444444"
         )
         btn_close.grid(row=2, column=0, pady=15)
 
     def refresh_item_list(self):
-        """Baut die Kontrollkästchen basierend auf dem aktuellen Datenbank-Cache neu auf."""
-        # Alte Widgets entfernen (falls manuell aktualisiert wird)
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
 
         self.checkboxes.clear()
 
-        # Aktuelle Items aus dem RAM-Cache holen
-        items = self.db_manager._cache
+        # Liste der stummgeschalteten Items aus der Config holen
+        hidden_items = self.config_data.get("auto_verify", [])
 
-        if not items:
+        if not hidden_items:
             ctk.CTkLabel(
                 self.scroll_frame,
-                text="Noch keine Items angelernt.\nNutze das Tool im Spiel, um Items zu erfassen.",
+                text="Es sind aktuell keine Pop-ups stummgeschaltet.",
                 text_color="#aaaaaa"
             ).pack(pady=20)
             return
 
-        # Erstelle für jedes Item eine Checkbox
-        for item_name, is_auto_loot in items.items():
-            var = ctk.BooleanVar(value=is_auto_loot)
+        for item_name in hidden_items:
+            var = ctk.BooleanVar(value=True)  # Standardmäßig an, weil sie in der Liste stehen
 
             cb = ctk.CTkCheckBox(
                 self.scroll_frame,
-                text=item_name,
+                text=item_name.title(),
                 variable=var,
                 command=lambda name=item_name, v=var: self._on_checkbox_toggle(name, v)
             )
@@ -95,11 +86,17 @@ class LootFilterWindow(ctk.CTkToplevel):
             self.checkboxes[item_name] = var
 
     def _on_checkbox_toggle(self, item_name, var):
-        """Speichert die Entscheidung des Nutzers direkt asynchron über den Manager."""
-        new_status = var.get()
-        self.db_manager.update_loot_status(item_name, new_status)
+        """Entfernt oder fügt das Item dynamisch zur Liste hinzu."""
+        hidden_list = self.config_data.get("auto_verify", [])
+
+        if var.get() and item_name not in hidden_list:
+            hidden_list.append(item_name)
+        elif not var.get() and item_name in hidden_list:
+            hidden_list.remove(item_name)
+
+        self.config_data["auto_verify"] = hidden_list
 
     def _on_closing(self):
         if self.on_close_callback:
-            self.on_close_callback()
+            self.on_close_callback(self.config_data)
         self.destroy()

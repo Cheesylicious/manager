@@ -317,10 +317,14 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         first_drop = drops[0] if isinstance(drops, list) else drops
         if isinstance(first_drop, dict):
             predicted_rune = first_drop.get("name", "Unknown")
-            confidence = first_drop.get("confidence", 0.85)
+            ground_score = first_drop.get("ground_score", 0.85)
+            inv_score = first_drop.get("inv_score", 0.0)
+            ground_img = first_drop.get("ground_img", None)
         else:
             predicted_rune = str(first_drop)
-            confidence = 0.85
+            ground_score = 0.85
+            inv_score = 0.0
+            ground_img = None
 
         if hasattr(self,
                    'active_verification_prompt') and self.active_verification_prompt and self.active_verification_prompt.winfo_exists():
@@ -330,7 +334,9 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
             self.active_verification_prompt = RuneVerificationPrompt(
                 parent=self,
                 predicted_rune=predicted_rune,
-                confidence=confidence,
+                ground_score=ground_score,
+                inv_score=inv_score,
+                ground_img=ground_img,
                 ai_engine=self.ai_engine,
                 on_confirm=self._on_rune_confirmed,
                 on_correct=self._on_rune_corrected
@@ -339,14 +345,26 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
     def _on_rune_confirmed(self, rune_name):
         self.lbl_live_loot.configure(text=f"Bestätigt: {rune_name.title()}", text_color="#2da44e")
 
+        # Holt sich den in diesem Moment angezeigten Score aus dem Pop-up
+        inv_score = 0.0
+        if hasattr(self, 'active_verification_prompt') and self.active_verification_prompt:
+            inv_score = getattr(self.active_verification_prompt, 'inv_score', 0.0)
+
+        if hasattr(self, "drop_watcher") and self.drop_watcher and hasattr(self.drop_watcher, "inv_verifier"):
+            if hasattr(self.drop_watcher.inv_verifier, "learn_confirmed_icon"):
+                # Das Netz ist jetzt doppelt gespannt (Übergabe des Scores hier)
+                self.drop_watcher.inv_verifier.learn_confirmed_icon(rune_name, inv_score)
+
     def _on_rune_corrected(self, old_rune, new_value, correction_type):
-        """Reagiert auf die neue, präzisierte Feedback-Struktur."""
         if correction_type == "rune":
             self.lbl_live_loot.configure(text=f"KI lernt: {new_value} (war {old_rune})", text_color="#00ccff")
         elif correction_type == "custom":
             self.lbl_live_loot.configure(text=f"KI blockiert Item: {new_value}", text_color="#ffaa00")
         elif correction_type == "false_alarm":
             self.lbl_live_loot.configure(text=f"KI lernt: Falschalarm verworfen", text_color="#cf222e")
+
+        if hasattr(self, "drop_watcher") and self.drop_watcher:
+            self.drop_watcher._load_templates()
 
     def update_tz_ui(self, tz_data):
         if self.winfo_exists() and hasattr(self, "lbl_next_tz"):

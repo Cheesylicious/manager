@@ -6,12 +6,20 @@ from rune_filter_ui import RuneFilterWindow
 from rune_capture_ui import RuneCaptureWindow
 from zone_capture_ui import ZoneCaptureWindow
 
+# --- NEUE MODULE ---
+from database_manager import ItemDatabaseManager
+from ui_loot_filter import LootFilterWindow
+
+
 class TrackerConfigurator(ctk.CTkScrollableFrame):
     def __init__(self, parent, main_app_ref):
         super().__init__(parent, fg_color="transparent")
         self.app = main_app_ref
         self.overlay = None
         self.config_data = TrackerConfig.load()
+
+        # Initialisiere die Datenbank für angelernte Items
+        self.db_manager = ItemDatabaseManager()
 
         self.status_labels = {}
         self.sound_vars = {}
@@ -61,13 +69,22 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         ctk.CTkCheckBox(d_frame, text="🔸 Runen Alarm:", variable=self.drop_var, command=self.save_drop,
                         text_color="#FFD700").pack(side="left", padx=(0, 5))
 
-        self.btn_rune_filter = ctk.CTkButton(d_frame, text="⚙️ Filter einstellen", width=120, command=self.open_rune_filter, fg_color="#444444")
+        self.btn_rune_filter = ctk.CTkButton(d_frame, text="⚙️ Filter einstellen", width=120,
+                                             command=self.open_rune_filter, fg_color="#444444")
         self.btn_rune_filter.pack(side="left", padx=(5, 5))
 
-        self.btn_rune_capture = ctk.CTkButton(d_frame, text="📸 Rune aufnehmen", width=120, command=self.open_rune_capture, fg_color="#1f538d")
-        self.btn_rune_capture.pack(side="left", padx=(5, 10))
+        self.btn_rune_capture = ctk.CTkButton(d_frame, text="📸 Rune aufnehmen", width=120,
+                                              command=self.open_rune_capture, fg_color="#1f538d")
+        self.btn_rune_capture.pack(side="left", padx=(5, 5))
 
-        # REIHE 2: PICKUP & DELAY
+        self.btn_loot_filter = ctk.CTkButton(d_frame, text="🎒 Eigener Loot", width=120, command=self.open_loot_filter,
+                                             fg_color="#556b2f")
+        self.btn_loot_filter.pack(side="left", padx=(5, 5))
+
+        self.btn_popup_manager = ctk.CTkButton(d_frame, text="🔕 Pop-ups verwalten", width=140, command=self.open_popup_manager, fg_color="#8B008B")
+        self.btn_popup_manager.pack(side="left", padx=(5, 10))
+
+        # REIHE 2: PICKUP, DELAY & NEUER TELEPORT
         p_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
         p_frame.pack(fill="x", padx=15, pady=5)
 
@@ -76,20 +93,30 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
                         text_color="#ff7f50").pack(side="left", padx=(0, 5))
 
         delay_frame = ctk.CTkFrame(p_frame, fg_color="transparent")
-        delay_frame.pack(side="left", padx=(5, 20))
+        delay_frame.pack(side="left", padx=(5, 15))
         ctk.CTkLabel(delay_frame, text="Verzögerung (ms):", font=("Roboto", 11)).pack(side="left", padx=(0, 5))
 
-        self.pickup_min_entry = ctk.CTkEntry(delay_frame, width=45, height=24)
+        self.pickup_min_entry = ctk.CTkEntry(delay_frame, width=40, height=24)
         self.pickup_min_entry.insert(0, str(self.config_data.get("pickup_delay_min", 150)))
         self.pickup_min_entry.bind("<KeyRelease>", lambda e: self.save_pickup_delay())
         self.pickup_min_entry.pack(side="left")
 
         ctk.CTkLabel(delay_frame, text="-", font=("Roboto", 11)).pack(side="left", padx=2)
 
-        self.pickup_max_entry = ctk.CTkEntry(delay_frame, width=45, height=24)
+        self.pickup_max_entry = ctk.CTkEntry(delay_frame, width=40, height=24)
         self.pickup_max_entry.insert(0, str(self.config_data.get("pickup_delay_max", 350)))
         self.pickup_max_entry.bind("<KeyRelease>", lambda e: self.save_pickup_delay())
         self.pickup_max_entry.pack(side="left")
+
+        # NEU: Teleport-Pickup Toggle und Keybind
+        self.tp_pickup_var = ctk.BooleanVar(value=self.config_data.get("teleport_pickup", False))
+        ctk.CTkCheckBox(p_frame, text="⚡ TP-Pickup", variable=self.tp_pickup_var, command=self.save_tp_pickup,
+                        text_color="#00ccff").pack(side="left", padx=(5, 5))
+
+        self.tp_key_var = ctk.StringVar(value=self.config_data.get("teleport_key", "Aus"))
+        tp_keys = ["Aus", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "Q", "W", "E", "R", "T", "A", "S", "D", "F", "Z", "X", "C", "V", "1", "2", "3", "4"]
+        ctk.CTkOptionMenu(p_frame, values=tp_keys, variable=self.tp_key_var,
+                          command=self.save_tp_key, width=65, height=24).pack(side="left", padx=(0, 5))
 
         # REIHE 3: ZONEN & EXP & GHOST
         e_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
@@ -99,7 +126,8 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         ctk.CTkCheckBox(e_frame, text="📈 EXP-Tracker", variable=self.xp_var, command=self.save_xp,
                         text_color="#00ccff").pack(side="left", padx=(0, 5))
 
-        self.btn_zone_capture = ctk.CTkButton(e_frame, text="🗺️ Zone aufnehmen", width=120, command=self.open_zone_capture, fg_color="#008080")
+        self.btn_zone_capture = ctk.CTkButton(e_frame, text="🗺️ Zone aufnehmen", width=120,
+                                              command=self.open_zone_capture, fg_color="#008080")
         self.btn_zone_capture.pack(side="left", padx=(10, 20))
 
         self.ghost_var = ctk.BooleanVar(value=self.config_data.get("clickthrough", False))
@@ -112,7 +140,8 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         tz_frame.pack(fill="x", padx=15, pady=(5, 15))
 
         self.tz_var = ctk.BooleanVar(value=self.config_data.get("show_next_tz", True))
-        ctk.CTkCheckBox(tz_frame, text="🔮 Nächste Terrorzone (D2Emu) anzeigen", variable=self.tz_var, command=self.save_tz,
+        ctk.CTkCheckBox(tz_frame, text="🔮 Nächste Terrorzone (D2Emu) anzeigen", variable=self.tz_var,
+                        command=self.save_tz,
                         text_color="#aa88ff").pack(side="left", padx=(0, 5))
 
         calib_frame = ctk.CTkFrame(self, border_width=1, border_color="#333")
@@ -159,6 +188,22 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
 
     def open_zone_capture(self):
         ZoneCaptureWindow(self.app, self.on_zone_updated)
+
+    def open_loot_filter(self):
+        LootFilterWindow(self.app, self.db_manager, self.on_loot_updated)
+
+    def on_loot_updated(self):
+        pass
+
+    def open_popup_manager(self):
+        from ui_popup_manager import PopupManagerWindow
+        PopupManagerWindow(self.app, self.config_data, self.on_popup_updated)
+
+    def on_popup_updated(self, updated_config):
+        self.config_data = updated_config
+        TrackerConfig.save(self.config_data)
+        if self.overlay:
+            self.overlay.reload_config()
 
     def on_runes_updated(self):
         TrackerConfig.save(self.config_data)
@@ -231,6 +276,20 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             self.overlay.drop_watcher.config = self.config_data
             if is_active: self.overlay.drop_watcher.update_config(True)
 
+    # NEU: Speichern des TP Checkbox Status
+    def save_tp_pickup(self):
+        self.config_data["teleport_pickup"] = self.tp_pickup_var.get()
+        TrackerConfig.save(self.config_data)
+        if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
+            self.overlay.drop_watcher.config = self.config_data
+
+    # NEU: Speichern der TP Taste
+    def save_tp_key(self, choice):
+        self.config_data["teleport_key"] = choice
+        TrackerConfig.save(self.config_data)
+        if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
+            self.overlay.drop_watcher.config = self.config_data
+
     def save_pickup_delay(self):
         try:
             min_val = int(self.pickup_min_entry.get())
@@ -240,7 +299,8 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             TrackerConfig.save(self.config_data)
             if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
                 self.overlay.drop_watcher.config = self.config_data
-        except ValueError: pass
+        except ValueError:
+            pass
 
     def save_xp(self):
         self.config_data["xp_active"] = self.xp_var.get()

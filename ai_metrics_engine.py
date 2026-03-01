@@ -25,7 +25,6 @@ class AIEngine:
                 "r_min": 140,
                 "rg_diff_min": 20
             },
-            # Neue Datenbank für manuell eingegebene Stör-Items
             "fp_sources": {}
         }
         if os.path.exists(self.brain_file):
@@ -96,23 +95,35 @@ class AIEngine:
 
     def get_threshold(self, rune_name):
         clean_name = rune_name.lower().strip()
-        return self.data["thresholds"].get(clean_name, 0.80)
+        base_thresh = 0.86 if len(clean_name) <= 3 else 0.80
+        return self.data["thresholds"].get(clean_name, base_thresh)
 
     def report_false_positive(self, rune_name, reported_confidence):
         clean_name = rune_name.lower().strip()
         current_thresh = self.get_threshold(clean_name)
-        new_thresh = min(0.95, max(current_thresh, reported_confidence + 0.02))
+
+        penalty = 0.05 if len(clean_name) <= 3 else 0.03
+        new_thresh = min(0.98, max(current_thresh, reported_confidence + penalty))
         self.data["thresholds"][clean_name] = round(new_thresh, 3)
+
+        current_r = self.data["color_calibration"].get("r_min", 140)
+        current_rg = self.data["color_calibration"].get("rg_diff_min", 20)
+
+        self.data["color_calibration"]["r_min"] = min(190, current_r + 4)
+        self.data["color_calibration"]["rg_diff_min"] = min(60, current_rg + 3)
+
         self._save_brain()
 
     def report_misclassification(self, predicted_rune, actual_rune, reported_confidence):
         pred_clean = predicted_rune.lower().strip()
         act_clean = actual_rune.lower().strip()
 
+        # ANPASSUNG: Wir setzen den Threshold der FALSCH erkannten Rune garantiert über die gemessene Konfidenz
         current_pred_thresh = self.get_threshold(pred_clean)
-        new_pred_thresh = min(0.95, max(current_pred_thresh, reported_confidence + 0.02))
+        new_pred_thresh = min(0.99, max(current_pred_thresh, reported_confidence + 0.015))
         self.data["thresholds"][pred_clean] = round(new_pred_thresh, 3)
 
+        # Die tatsächliche (richtige) Rune machen wir toleranter
         current_act_thresh = self.get_threshold(act_clean)
         new_act_thresh = max(0.65, current_act_thresh - 0.01)
         self.data["thresholds"][act_clean] = round(new_act_thresh, 3)
@@ -120,12 +131,12 @@ class AIEngine:
         self._save_brain()
 
     def report_custom_false_positive(self, predicted_rune, actual_item, reported_confidence):
-        """Erhöht die Schwelle für die falsche Rune und protokolliert den Namen des Stör-Items."""
         clean_pred = predicted_rune.lower().strip()
         actual_item = actual_item.strip()
 
         current_thresh = self.get_threshold(clean_pred)
-        new_thresh = min(0.95, max(current_thresh, reported_confidence + 0.02))
+        penalty = 0.04 if len(clean_pred) <= 3 else 0.02
+        new_thresh = min(0.98, max(current_thresh, reported_confidence + penalty))
         self.data["thresholds"][clean_pred] = round(new_thresh, 3)
 
         if "fp_sources" not in self.data:
