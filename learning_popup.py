@@ -4,7 +4,14 @@ import os
 import ctypes
 import time
 import sys
+import winsound
 from PIL import Image
+
+# INNOVATION: KI Engine für den selbstlernenden Prozess einbinden
+try:
+    from ai_metrics_engine import AIEngine
+except ImportError:
+    AIEngine = None
 
 
 class LearningPopup(ctk.CTkToplevel):
@@ -21,6 +28,9 @@ class LearningPopup(ctk.CTkToplevel):
         self.folder_path = folder_path
         self.success_callback = success_callback
         self.later_callback = later_callback
+
+        # KI-Engine initialisieren
+        self.ai_engine = AIEngine() if AIEngine else None
 
         # Fenster-Konfiguration
         self.overrideredirect(True)
@@ -53,7 +63,7 @@ class LearningPopup(ctk.CTkToplevel):
         self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.btn_frame.pack(fill="x", padx=10, pady=5)
 
-        # INNOVATION: Kompakte Buttons, um Platz für das Fehler-Reporting zu machen
+        # Kompakte Buttons, um Platz für das Fehler-Reporting zu machen
         self.btn_yes = ctk.CTkButton(self.btn_frame, text="✅ Ja", width=45, height=30,
                                      fg_color="#2da44e", hover_color="#238636", command=self.save_icon)
         self.btn_yes.pack(side="left", padx=2)
@@ -62,7 +72,7 @@ class LearningPopup(ctk.CTkToplevel):
                                        fg_color="#1f538d", hover_color="#1a4577", command=self.mark_later)
         self.btn_later.pack(side="left", padx=2)
 
-        # NEU: Falschmeldung Button
+        # Falschmeldung Button
         self.btn_false = ctk.CTkButton(self.btn_frame, text="⚠️ Falsch", width=60, height=30,
                                        fg_color="#d97706", hover_color="#b45309",
                                        command=self.show_false_positive_options)
@@ -72,7 +82,7 @@ class LearningPopup(ctk.CTkToplevel):
                                     fg_color="#cf222e", hover_color="#a40e26", command=self.destroy)
         self.btn_no.pack(side="left", padx=2)
 
-        # NEU: Verstecktes Menü für die Fehlerkategorisierung
+        # Verstecktes Menü für die Fehlerkategorisierung
         self.fp_frame = ctk.CTkFrame(self, fg_color="transparent")
 
         self.btn_fp_none = ctk.CTkButton(self.fp_frame, text="Gar keine Rune gedroppt", height=25,
@@ -104,7 +114,7 @@ class LearningPopup(ctk.CTkToplevel):
         self.btn_frame.pack(fill="x", padx=10, pady=5)
 
     def save_false_positive(self, reason):
-        """Speichert das erkannte Bild als Negativ-Beispiel für den Scanner ab."""
+        """Speichert das erkannte Bild als Negativ-Beispiel für den Scanner ab und meldet es der KI."""
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
@@ -128,6 +138,27 @@ class LearningPopup(ctk.CTkToplevel):
                 cv2.imwrite(save_path, self.icon_image)
         except Exception as e:
             print(f"[LearningPopup] Fehler beim Speichern der Falschmeldung: {e}")
+
+        # --- NEU: KI Integration ---
+        if self.ai_engine:
+            # KI über Fehler informieren, um Schwellenwerte anzupassen
+            self.ai_engine.report_false_positive(self.rune_name, 0.85)
+
+            try:
+                winsound.Beep(500, 150)
+            except Exception:
+                pass
+
+            # Feedback an das Haupt-Overlay senden
+            if hasattr(self.parent_overlay, 'lbl_live_loot'):
+                try:
+                    msg = f"KI lernt: {self.rune_name} Bild geblockt"
+                    if reason == "falsches_item":
+                        msg = f"KI: Form-Scan für {self.rune_name} korrigiert"
+                    self.parent_overlay.lbl_live_loot.configure(text=msg, text_color="#ffaa00")
+                except Exception:
+                    pass
+        # ---------------------------
 
         self.destroy()
 

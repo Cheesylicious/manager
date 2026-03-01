@@ -35,6 +35,16 @@ try:
 except ImportError:
     ZoneWatcher = None
 
+try:
+    from ai_metrics_engine import AIEngine
+except ImportError:
+    AIEngine = None
+
+try:
+    from rune_verification_prompt import RuneVerificationPrompt
+except ImportError:
+    RuneVerificationPrompt = None
+
 
 class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, WindowStateMixin, RunManagerMixin,
                         PendingRunesMixin):
@@ -67,8 +77,10 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
 
         self.current_run_drops = []
         self.pending_runes = []
-
         self.bound_hwnd = None
+
+        self.ai_engine = AIEngine() if AIEngine else None
+        self.active_verification_prompt = None
 
         self.drop_watcher = DropWatcher(config_data, drop_callback=self.on_drop_detected,
                                         ui_parent=self) if DropWatcher else None
@@ -87,7 +99,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.last_zone_check = ""
         self.blink_state = False
 
-        # Startet den Fetcher für die Terrorzonen
         self.tz_fetcher = TZFetcher(self.stop_event)
         self.tz_fetcher.start(self.update_tz_ui)
 
@@ -98,7 +109,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
             self.after(300, lambda: self.set_clickthrough(True))
 
     def _build_ui(self):
-        """Kapselt den gesamten Aufbau der Benutzeroberfläche."""
         self.main_frame = ctk.CTkFrame(self, fg_color="#1a1a1a", border_width=1, border_color="#444444",
                                        corner_radius=8)
         self.main_frame.pack(fill="both", expand=True, padx=2, pady=2)
@@ -117,7 +127,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                                        text_color="#888888")
         self.lbl_status.pack(pady=0)
 
-        # ---- ZONE WRAPPER ----
         self.zone_wrapper = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.zone_wrapper.pack(fill="x", pady=(0, 1))
 
@@ -152,7 +161,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                                                values=["Wähle..."], width=130, height=22, font=("Roboto", 11),
                                                command=self.start_inline_capture_dropdown)
 
-        # --- INNOVATION: Terrorzonen-Block ---
         self.tz_display_frame = ctk.CTkFrame(self.zone_wrapper, fg_color="#111111", corner_radius=6, border_width=1,
                                              border_color="#333333")
 
@@ -166,11 +174,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.lbl_live_loot = ctk.CTkLabel(self.content_frame, text="", font=("Roboto", 10, "bold"),
                                           text_color="#FFD700")
         self.lbl_live_loot.pack(pady=0)
-
-        self.pending_var = ctk.StringVar(value="📸 Runen nachtragen")
-        self.pending_dropdown = ctk.CTkOptionMenu(self.content_frame, variable=self.pending_var, values=[], width=160,
-                                                  height=22, font=("Roboto", 11, "bold"), fg_color="#1f538d",
-                                                  button_color="#1a4577", command=self.process_selected_pending_rune)
 
         self.timer_container = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.timer_container.pack(pady=0)
@@ -186,13 +189,24 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                                                command=self.toggle_history)
         self.btn_toggle_expand.pack(side="left")
 
-        # KOMPAKTER EXP-BLOCK
-        self.lbl_xp = ctk.CTkLabel(self.content_frame, text="XP: --% | --%/h | Next: --",
+        self.xp_container = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+
+        self.lvl_var = ctk.StringVar(value="")
+        self.entry_lvl = ctk.CTkEntry(self.xp_container, textvariable=self.lvl_var, width=28, height=18,
+                                      font=("Roboto Mono", 10), placeholder_text="Lvl", fg_color="#111",
+                                      border_color="#444")
+        self.entry_lvl.pack(side="left", padx=(0, 5))
+
+        self.entry_lvl.bind("<Return>", self._on_lvl_submit)
+        self.entry_lvl.bind("<FocusOut>", self._on_lvl_submit)
+
+        self.lbl_xp = ctk.CTkLabel(self.xp_container, text="XP: --% | --/h | Next: --",
                                    font=("Roboto Mono", 10, "bold"), text_color="#ffd700", cursor="hand2")
         self.lbl_xp.bind("<Button-3>", self.reset_xp_stats)
+        self.lbl_xp.pack(side="left")
 
         if self.config_data.get("xp_active"):
-            self.lbl_xp.pack(pady=(0, 2))
+            self.xp_container.pack(pady=(0, 2))
 
         self.stats_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.stats_frame.pack(fill="x", padx=10)
@@ -274,21 +288,67 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.context_menu.add_command(label="⏸️ Pause", command=self.toggle_pause)
         self.context_menu.add_command(label="👻 Ghost-Modus (Strg+Alt+G)", command=lambda: self.set_clickthrough(True))
         self.context_menu.add_command(label="🔄 Run-Timer zurücksetzen", command=self.reset_current_run)
-        # NEU: Eintrag im Dropdown-Menü
         self.context_menu.add_command(label="📈 EXP-Statistik zurücksetzen", command=self.reset_xp_stats)
         self.context_menu.add_command(label="🗑️ Alle Daten zurücksetzen", command=self.reset_session)
         self.context_menu.add_command(label="❌ Beenden", command=self.stop_tracking)
 
         for w in [self.main_frame, self.content_frame, self.lbl_status, self.stats_frame, self.timer_container,
-                  self.lbl_timer, self.lbl_xp,
+                  self.lbl_timer, self.lbl_xp, self.xp_container,
                   self.avg_frame, self.zone_wrapper, self.zone_top_frame, self.lbl_zone, self.lbl_live_loot]:
             w.bind("<Button-1>", self.start_move)
             w.bind("<B1-Motion>", self.do_move)
             w.bind("<Button-3>", self.show_context_menu)
         self.x = self.y = 0
 
+    def _on_lvl_submit(self, event=None):
+        self.focus()
+        if self.lvl_var.get().strip():
+            self.entry_lvl.configure(border_color="#2da44e")
+            self.after(1000, lambda: self.entry_lvl.configure(border_color="#444444"))
+        self._update_xp_display(do_scan=True)
+
+    def on_drop_detected(self, drops, *args, **kwargs):
+        if hasattr(super(), 'on_drop_detected'):
+            super().on_drop_detected(drops, *args, **kwargs)
+
+        if not self.ai_engine or not drops:
+            return
+
+        first_drop = drops[0] if isinstance(drops, list) else drops
+        if isinstance(first_drop, dict):
+            predicted_rune = first_drop.get("name", "Unknown")
+            confidence = first_drop.get("confidence", 0.85)
+        else:
+            predicted_rune = str(first_drop)
+            confidence = 0.85
+
+        if hasattr(self,
+                   'active_verification_prompt') and self.active_verification_prompt and self.active_verification_prompt.winfo_exists():
+            self.active_verification_prompt.destroy()
+
+        if RuneVerificationPrompt:
+            self.active_verification_prompt = RuneVerificationPrompt(
+                parent=self,
+                predicted_rune=predicted_rune,
+                confidence=confidence,
+                ai_engine=self.ai_engine,
+                on_confirm=self._on_rune_confirmed,
+                on_correct=self._on_rune_corrected
+            )
+
+    def _on_rune_confirmed(self, rune_name):
+        self.lbl_live_loot.configure(text=f"Bestätigt: {rune_name.title()}", text_color="#2da44e")
+
+    def _on_rune_corrected(self, old_rune, new_value, correction_type):
+        """Reagiert auf die neue, präzisierte Feedback-Struktur."""
+        if correction_type == "rune":
+            self.lbl_live_loot.configure(text=f"KI lernt: {new_value} (war {old_rune})", text_color="#00ccff")
+        elif correction_type == "custom":
+            self.lbl_live_loot.configure(text=f"KI blockiert Item: {new_value}", text_color="#ffaa00")
+        elif correction_type == "false_alarm":
+            self.lbl_live_loot.configure(text=f"KI lernt: Falschalarm verworfen", text_color="#cf222e")
+
     def update_tz_ui(self, tz_data):
-        """Aktualisiert die Terrorzonen-Labels threadsicher (verhindert Engine-Abstürze)."""
         if self.winfo_exists() and hasattr(self, "lbl_next_tz"):
             new_text = f"🔮 TZ: {tz_data.get('next', 'Unbekannt')}"
             self.after(0, lambda: self.lbl_next_tz.configure(text=new_text))
@@ -309,7 +369,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                 sound_on = self.config_data.get(f"{key}_sound", True)
                 self.sensors_ui[key]["sound"].configure(text="🔊" if sound_on else "🔇")
 
-        # Ein- und Ausblenden des TZ-Blocks je nach Checkbox in der Config
         if hasattr(self, "tz_display_frame"):
             if self.config_data.get("show_next_tz", True):
                 self.tz_display_frame.pack(pady=(2, 1), fill="x", padx=15)
@@ -328,7 +387,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
             self.configurator.sync_ui()
 
     def reset_xp_stats(self, event=None):
-        """Wird per Rechtsklick auf die EXP-Anzeige oder über das Menü aufgerufen."""
         if self.xp_watcher:
             self.xp_watcher.reset()
             winsound.Beep(800, 50)
@@ -340,12 +398,12 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         if not self.config_data.get("xp_active") or not self.xp_watcher: return
 
         if do_scan:
-            perc, xph = self.xp_watcher.get_current_xp_percent()
+            current_level_input = self.lvl_var.get().strip()
+            perc, xph = self.xp_watcher.get_current_xp_percent(current_level=current_level_input)
             runs_left = self.xp_watcher.estimate_runs_to_level(self.run_count)
             self.lbl_xp.configure(text=f"XP: {perc}% | {xph}/h | Next: {runs_left}")
 
     def _blink_loop(self):
-        """Lässt 'Unbekannt' rot/blau blinken, wenn keine Zonenaufnahme aktiv ist."""
         if getattr(self, "monitoring", False) and not self.stop_event.is_set():
             if self.last_zone_check == "Unbekannt" and not self.is_capturing_zone and not self.inline_capture_expanded:
                 self.blink_state = not self.blink_state
@@ -356,7 +414,6 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
         self.after(600, self._blink_loop)
 
     def bind_to_active_window(self):
-        """Bindet den Tracker manuell an das Fenster, das gerade im Vordergrund ist."""
         hwnd = ctypes.windll.user32.GetForegroundWindow()
         if hwnd:
             self.bound_hwnd = hwnd
@@ -365,26 +422,20 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                 self.lbl_status.configure(text="MANUELL GEBUNDEN", text_color="#00ccff")
 
     def _is_d2r_foreground(self):
-        """
-        Überschreibt die Mixin-Methode, um sauberes Multiboxing zu ermöglichen.
-        Ignoriert fremde D2R-Fenster und schickt den Tracker in den Pause-Modus.
-        """
         try:
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             if not hwnd: return False
 
-            # 1. Wenn wir gebunden sind, muss es exakt dieses HWND-Fenster sein!
             if getattr(self, "bound_hwnd", None) is not None:
                 return hwnd == self.bound_hwnd
 
-            # 2. Wenn noch nicht gebunden, binden wir uns an das erste Diablo-Fenster, das wir sehen
             length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
             if length == 0: return False
             buff = ctypes.create_unicode_buffer(length + 1)
             ctypes.windll.user32.GetWindowTextW(hwnd, buff, length + 1)
 
             if "Diablo" in buff.value:
-                self.bound_hwnd = hwnd  # BINDING SETZEN!
+                self.bound_hwnd = hwnd
                 return True
             return False
         except:
