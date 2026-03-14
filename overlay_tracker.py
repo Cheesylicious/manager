@@ -3,6 +3,7 @@ import tkinter as tk
 import threading
 import ctypes
 import winsound
+import time
 
 from overlay_config import STEPS_INFO, TrackerConfig
 from tz_fetcher import TZFetcher
@@ -45,9 +46,14 @@ try:
 except ImportError:
     RuneVerificationPrompt = None
 
+# NEU: Import für das Audio-Notification-Popup
+try:
+    from audio_notification_ui import AudioNotificationWindow
+except ImportError:
+    AudioNotificationWindow = None
 
-class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, WindowStateMixin, RunManagerMixin,
-                        PendingRunesMixin):
+
+class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, WindowStateMixin, RunManagerMixin, PendingRunesMixin):
     def __init__(self, parent, config_data, configurator=None):
         super().__init__(parent)
         self.config_data = config_data
@@ -81,6 +87,7 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
 
         self.ai_engine = AIEngine() if AIEngine else None
         self.active_verification_prompt = None
+        self.active_audio_notification = None
 
         self.drop_watcher = DropWatcher(config_data, drop_callback=self.on_drop_detected,
                                         ui_parent=self) if DropWatcher else None
@@ -107,6 +114,14 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
 
         if self.config_data.get("clickthrough", False):
             self.after(300, lambda: self.set_clickthrough(True))
+
+    def show_audio_notification(self):
+        """Wird aufgerufen, wenn der Audio-Detektor einen Runen-Sound hört."""
+        if AudioNotificationWindow:
+            # Verhindert, dass das Fenster mehrfach spawnt, falls der Sound stottert
+            if hasattr(self, "active_audio_notification") and self.active_audio_notification and self.active_audio_notification.winfo_exists():
+                return
+            self.active_audio_notification = AudioNotificationWindow(self)
 
     def _build_ui(self):
         self.main_frame = ctk.CTkFrame(self, fg_color="#1a1a1a", border_width=1, border_color="#444444",
@@ -272,7 +287,11 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
 
         self.btn_learn_icon = ctk.CTkButton(self.tools_frame, text="🖼️ 2. Icon im Inventar ausschneiden", height=28,
                                             command=self.open_icon_snipping, fg_color="#1f538d", hover_color="#1a4577")
-        self.btn_learn_icon.grid(row=3, column=0, pady=(2, 10), padx=10, sticky="ew")
+        self.btn_learn_icon.grid(row=3, column=0, pady=2, padx=10, sticky="ew")
+
+        self.btn_learn_audio = ctk.CTkButton(self.tools_frame, text="🎧 3. Sound-Erkennung anlernen", height=28,
+                                             command=self.open_audio_capture, fg_color="#1f538d", hover_color="#1a4577")
+        self.btn_learn_audio.grid(row=4, column=0, pady=(2, 10), padx=10, sticky="ew")
 
         self.history_frame = ctk.CTkFrame(self.expanded_frame, fg_color="#0d0d0d", corner_radius=6)
         self.history_frame.pack(fill="both", expand=True)
@@ -326,9 +345,12 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
             inv_score = 0.0
             ground_img = None
 
-        if hasattr(self,
-                   'active_verification_prompt') and self.active_verification_prompt and self.active_verification_prompt.winfo_exists():
+        if hasattr(self, 'active_verification_prompt') and self.active_verification_prompt and self.active_verification_prompt.winfo_exists():
             self.active_verification_prompt.destroy()
+
+        audio_was_detected = False
+        if hasattr(self, "last_audio_rune_drop"):
+            audio_was_detected = (time.time() - self.last_audio_rune_drop) < 5.0
 
         if RuneVerificationPrompt:
             self.active_verification_prompt = RuneVerificationPrompt(
@@ -339,20 +361,19 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
                 ground_img=ground_img,
                 ai_engine=self.ai_engine,
                 on_confirm=self._on_rune_confirmed,
-                on_correct=self._on_rune_corrected
+                on_correct=self._on_rune_corrected,
+                audio_detected=audio_was_detected
             )
 
     def _on_rune_confirmed(self, rune_name):
         self.lbl_live_loot.configure(text=f"Bestätigt: {rune_name.title()}", text_color="#2da44e")
 
-        # Holt sich den in diesem Moment angezeigten Score aus dem Pop-up
         inv_score = 0.0
         if hasattr(self, 'active_verification_prompt') and self.active_verification_prompt:
             inv_score = getattr(self.active_verification_prompt, 'inv_score', 0.0)
 
         if hasattr(self, "drop_watcher") and self.drop_watcher and hasattr(self.drop_watcher, "inv_verifier"):
             if hasattr(self.drop_watcher.inv_verifier, "learn_confirmed_icon"):
-                # Das Netz ist jetzt doppelt gespannt (Übergabe des Scores hier)
                 self.drop_watcher.inv_verifier.learn_confirmed_icon(rune_name, inv_score)
 
     def _on_rune_corrected(self, old_rune, new_value, correction_type):
@@ -423,7 +444,7 @@ class RunTrackerOverlay(ctk.CTkToplevel, ZoneCaptureMixin, PotionLogicMixin, Win
 
     def _blink_loop(self):
         if getattr(self, "monitoring", False) and not self.stop_event.is_set():
-            if self.last_zone_check == "Unbekannt" and not self.is_capturing_zone and not self.inline_capture_expanded:
+            if self.last_zone_check == "Unbekannt" and not self.is_capturing_zone and not getattr(self, "inline_capture_expanded", False):
                 self.blink_state = not self.blink_state
                 self.lbl_zone.configure(text_color="#cf222e" if self.blink_state else "#00ccff")
             else:

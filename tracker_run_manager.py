@@ -29,24 +29,19 @@ class RunManagerMixin:
         self._update_xp_display(do_scan=False)
         self.reset_current_run()
 
-    # ---- NEUE FUNKTIONEN FÜR DAS EXPANDED MENU ----
     def toggle_autopickup(self):
-        """Speichert den Auto-Pickup Zustand sofort live in der Config."""
         self.config_data["auto_pickup"] = self.ap_var.get()
         TrackerConfig.save(self.config_data)
 
     def open_text_capture(self):
-        """Öffnet das Tool zum Anlernen von Runen-Texten auf dem Boden."""
         try:
             from rune_capture_ui import RuneCaptureWindow
-            # Callback aktualisiert die Scanner-Templates live nach dem Speichern
             cb = lambda: self.drop_watcher._load_templates() if self.drop_watcher else None
             RuneCaptureWindow(self, cb)
         except Exception as e:
             print(f"Fehler beim Öffnen des Text-Scanners: {e}")
 
     def open_icon_snipping(self):
-        """Öffnet ein Dialogfenster und danach das Vollbild-Snipping-Tool für Inventar-Icons."""
         dialog = ctk.CTkInputDialog(text="Welche Rune möchtest du ausschneiden? (z.B. Ber)", title="Rune wählen")
         rune_name = dialog.get_input()
         if rune_name:
@@ -62,14 +57,20 @@ class RunManagerMixin:
                 RuneSnippingTool(self, rune_name, folder_path, self.on_snip_success)
             except Exception as e:
                 print(f"Fehler beim Öffnen des Snipping Tools: {e}")
-    # -----------------------------------------------
+
+    def open_audio_capture(self):
+        """Öffnet das Tool zum Anlernen des spezifischen Runen-Sounds."""
+        try:
+            from audio_capture_ui import AudioCaptureWindow
+            AudioCaptureWindow(self, self.config_data)
+        except Exception as e:
+            print(f"Fehler beim Öffnen des Audio-Scanners: {e}")
 
     def toggle_history(self, event=None):
         self.is_expanded = not self.is_expanded
         if self.is_expanded:
             self.btn_toggle_expand.configure(text="▲")
-            # Wir geben dem Overlay 310 Pixel statt 250, damit Tools + Historie gut reinpassen
-            self.geometry(f"{self.current_width}x{self.current_height + 310}")
+            self.geometry(f"{self.current_width}x{self.current_height + 350}")
             self.expanded_frame.pack(fill="both", expand=True, padx=5, pady=(0, 10), before=self.guardian_frame)
             self.update_history_list()
         else:
@@ -155,8 +156,6 @@ class RunManagerMixin:
 
     def update_timer_gui(self):
         if self.monitoring and not self.stop_event.is_set():
-            # INNOVATION: Timer wird nur aktualisiert, wenn wir NICHT rausgetabbt sind.
-            # Dadurch friert die Zeitanzeige für das Auge perfekt ein!
             if self.in_game and self.start_time > 0 and not self.paused and not getattr(self, "is_tabbed_out", False):
                 dur = time.time() - self.start_time
                 self.lbl_timer.configure(text=f"{int(dur // 60):02}:{int(dur % 60):02}.{int((dur % 1) * 100):02}")

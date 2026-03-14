@@ -17,8 +17,23 @@ except ImportError:
     except ImportError:
         sys_hooks = None
 
+# Einbindung des Audio-Detektors
+try:
+    from audio_rune_detector import AudioRuneDetector
+except ImportError:
+    AudioRuneDetector = None
+
 
 class PotionLogicMixin:
+
+    def _on_rune_audio_detected(self):
+        self.last_audio_rune_drop = time.time()
+        print("🔊 [Audio-Sensor] Runen-Drop akustisch erkannt!")
+
+        # Sichere Weitergabe an den Haupt-GUI-Thread, um das Pop-up zu öffnen
+        if hasattr(self, 'show_audio_notification'):
+            self.after(0, self.show_audio_notification)
+
     def _eval_state(self, key1, key2=None):
         cfg1 = self.sensors.get(key1)
         cfg2 = self.sensors.get(key2) if key2 else None
@@ -68,6 +83,13 @@ class PotionLogicMixin:
         self.is_tabbed_out = False
         self.tabbed_out_at = 0
 
+        # Audio-Detektor initialisieren und Config übergeben
+        self.last_audio_rune_drop = 0
+        self.audio_detector = None
+        if AudioRuneDetector:
+            self.audio_detector = AudioRuneDetector(self._on_rune_audio_detected, self.config_data)
+            self.audio_detector.start()
+
         while not self.stop_event.is_set():
             ctrl = ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000
             alt = ctypes.windll.user32.GetAsyncKeyState(0x12) & 0x8000
@@ -81,12 +103,11 @@ class PotionLogicMixin:
                 is_active_window = self._is_d2r_foreground()
 
                 if is_active_window:
-                    # MULTIBOXING TIMER LOGIC: Wir sind zurück im gebundenen Spiel
                     if self.is_tabbed_out:
                         self.is_tabbed_out = False
                         if getattr(self, "in_game", False) and self.tabbed_out_at > 0:
                             time_away = time.time() - self.tabbed_out_at
-                            self.start_time += time_away  # Verschiebt den Startpunkt um die Abwesenheit
+                            self.start_time += time_away
                             self.tabbed_out_at = 0
 
                     is_char = self._eval_state("char_sel_1", "char_sel_2")
@@ -175,7 +196,6 @@ class PotionLogicMixin:
                             self.btn_capture_zone.pack_forget()
                         self.last_zone_check = ""
                 else:
-                    # MULTIBOXING TIMER LOGIC: Wir tabben raus
                     if not self.is_tabbed_out:
                         self.is_tabbed_out = True
                         if getattr(self, "in_game", False):
@@ -198,6 +218,9 @@ class PotionLogicMixin:
                 time.sleep(0.1)
             except Exception as e:
                 time.sleep(1)
+
+        if getattr(self, "audio_detector", None):
+            self.audio_detector.stop()
 
     def _check_color(self, cfg, mode="match"):
         if not cfg: return False, (0, 0, 0)

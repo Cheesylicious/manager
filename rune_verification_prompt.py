@@ -16,7 +16,8 @@ ALL_RUNES = [
 
 
 class RuneVerificationPrompt(ctk.CTkToplevel):
-    def __init__(self, parent, predicted_rune, ground_score, inv_score, ground_img, ai_engine, on_confirm, on_correct):
+    def __init__(self, parent, predicted_rune, ground_score, inv_score, ground_img, ai_engine, on_confirm, on_correct,
+                 audio_detected=False):
         super().__init__(parent)
         self.parent_overlay = parent
         self.predicted_rune = predicted_rune
@@ -26,6 +27,7 @@ class RuneVerificationPrompt(ctk.CTkToplevel):
         self.ai_engine = ai_engine
         self.on_confirm = on_confirm
         self.on_correct = on_correct
+        self.audio_detected = audio_detected
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -51,7 +53,13 @@ class RuneVerificationPrompt(ctk.CTkToplevel):
             score_text += f" | Inventar: Nicht geprüft"
 
         self.lbl_score = ctk.CTkLabel(self, text=score_text, font=("Roboto", 11, "bold"), text_color="#aaaaaa")
-        self.lbl_score.pack(pady=(0, 5))
+        self.lbl_score.pack(pady=(0, 2))
+
+        # NEU: Audio-Sensor Indikator in die UI einbauen
+        audio_text = "🔊 Audio-Sensor: Bestätigt" if self.audio_detected else "🔇 Audio-Sensor: Nichts gehört"
+        audio_color = "#2da44e" if self.audio_detected else "#aaaaaa"
+        self.lbl_audio = ctk.CTkLabel(self, text=audio_text, font=("Roboto", 11, "bold"), text_color=audio_color)
+        self.lbl_audio.pack(pady=(0, 5))
 
         self.auto_verify_var = ctk.BooleanVar(value=False)
         self.cb_auto = ctk.CTkCheckBox(self, text="Dauerhaft ausblenden\n(Zukünftig auto-akzeptieren)",
@@ -237,12 +245,21 @@ class RuneVerificationPrompt(ctk.CTkToplevel):
             self.after_cancel(self._timeout)
 
         if self.auto_verify_var.get():
+            # Speichert in die Konfigurationsdatei auf der Festplatte
             cfg = TrackerConfig.load()
             if "auto_verify" not in cfg:
                 cfg["auto_verify"] = []
             if self.predicted_rune not in cfg["auto_verify"]:
                 cfg["auto_verify"].append(self.predicted_rune)
                 TrackerConfig.save(cfg)
+
+            # NEU: Überschreibt die Konfiguration direkt im aktiven Hauptprogramm (In-Memory),
+            # damit das Programm nicht erst neu gestartet werden muss, um das Pop-up zu unterdrücken.
+            if hasattr(self.parent_overlay, "config_data"):
+                if "auto_verify" not in self.parent_overlay.config_data:
+                    self.parent_overlay.config_data["auto_verify"] = []
+                if self.predicted_rune not in self.parent_overlay.config_data["auto_verify"]:
+                    self.parent_overlay.config_data["auto_verify"].append(self.predicted_rune)
 
         if self.on_confirm:
             self.on_confirm(self.predicted_rune)
