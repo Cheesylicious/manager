@@ -1,6 +1,8 @@
 import threading
 import time
 import numpy as np
+import collections
+import ctypes
 
 try:
     import pyaudiowpatch as pyaudio
@@ -10,9 +12,9 @@ except ImportError:
 
 class AudioRuneDetector(threading.Thread):
     """
-    Ein asynchroner Audio-Listener. Verwendet den spektralen DNA-Abgleich (FFT).
-    Liest den Audiostream im sicheren Blockier-Modus, um Buffer-Overflows und Frame-Drops
-    im Live-Spiel vollständig auszuschließen.
+    Ein asynchroner Audio-Listener.
+    Löst Problem 1: Scannt nur, wenn D2R im Vordergrund ist (ignoriert Discord/Tippen).
+    Löst Problem 2: Ignoriert alles unter 1000 Hz, filtert so das Aufheben von Items & Würfel heraus.
     """
 
     def __init__(self, on_rune_detected_callback, config_data=None):
@@ -22,6 +24,10 @@ class AudioRuneDetector(threading.Thread):
         self.running = False
         self.chunk_size = 2048
 
+        self.history_len = 15
+        self.peak_history = collections.deque(maxlen=self.history_len)
+        self.local_history = collections.deque(maxlen=self.history_len)
+
         self._load_config()
         self.last_detection = 0
 
@@ -30,9 +36,25 @@ class AudioRuneDetector(threading.Thread):
         if not isinstance(self.target_freqs, list):
             self.target_freqs = [float(self.target_freqs)]
 
-        self.min_energy = self.config_data.get("audio_min_energy", 0.5)
+        self.min_energy = self.config_data.get("audio_min_energy", 0.05)
         self.min_ratio = self.config_data.get("audio_min_ratio", 0.20)
+        self.min_global_ratio = self.config_data.get("audio_min_global_ratio", 0.10)
         self.target_spk_name = self.config_data.get("audio_output_device_name", "")
+
+    def _is_d2r_foreground(self):
+        """Prüft, ob Diablo 2 Resurrected gerade das aktive Fenster ist."""
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd:
+                return False
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return False
+            buff = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buff, length + 1)
+            return "Diablo" in buff.value
+        except:
+            return False
 
     def run(self):
         if pyaudio is None:
@@ -74,7 +96,6 @@ class AudioRuneDetector(threading.Thread):
             buffer_frames = 4096
             audio_buffer = np.zeros(buffer_frames, dtype=np.float32)
 
-            # FIX: Auch hier direkter, stotterfreier Blockier-Modus ohne Callback
             stream = p.open(format=pyaudio.paFloat32,
                             channels=channels,
                             rate=samplerate,
@@ -87,7 +108,6 @@ class AudioRuneDetector(threading.Thread):
             while self.running and stream.is_active():
                 try:
                     self._load_config()
-                    # Blockierendes Auslesen (exception_on_overflow=False verhindert Ruckler)
                     in_data = stream.read(self.chunk_size, exception_on_overflow=False)
                     new_data = np.frombuffer(in_data, dtype=np.float32)
 
@@ -95,7 +115,6 @@ class AudioRuneDetector(threading.Thread):
                         new_data = new_data.reshape(-1, channels)
                         new_data = new_data[:, 0]
 
-                    # Buffer weiterschieben (Rolling Window)
                     audio_buffer[:-self.chunk_size] = audio_buffer[self.chunk_size:]
                     audio_buffer[-self.chunk_size:] = new_data
 
@@ -113,31 +132,60 @@ class AudioRuneDetector(threading.Thread):
             p.terminate()
 
     def _process_spectral_dna(self, audio_data, samplerate):
+        # Wenn wir nicht im Spiel sind (z.B. Desktop/Browser), ignorieren wir sämtlichen Ton!
+        if not self._is_d2r_foreground():
+            return
+
         fft_result = np.fft.rfft(audio_data)
         frequencies = np.fft.rfftfreq(len(audio_data), 1.0 / samplerate)
         magnitudes = np.abs(fft_result)
 
-        hf_mask = (frequencies >= 4000) & (frequencies <= 16000)
-        current_hf_energy = float(np.sum(magnitudes[hf_mask]))
+        # Fokus strictly auf metallische Töne (1000 Hz bis 12000 Hz),
+        # das filtert "Wusch"- und Inventar-Geräusche (meist < 1000 Hz) komplett raus.
+        search_mask = (frequencies >= 1000) & (frequencies <= 12000)
+        current_target_energy = float(np.sum(magnitudes[search_mask]))
 
-        if current_hf_energy < self.min_energy:
+        if current_target_energy < self.min_energy:
             return
 
         peak_energy = 0.0
         local_energy = 0.0
 
         for f in self.target_freqs:
-            p_mask = (frequencies >= f - 50) & (frequencies <= f + 50)
-            l_mask = (frequencies >= f - 500) & (frequencies <= f + 500)
+            p_mask = (frequencies >= f - 120) & (frequencies <= f + 120)
+            l_mask = (frequencies >= f - 600) & (frequencies <= f + 600)
 
             peak_energy += float(np.sum(magnitudes[p_mask]))
             local_energy += float(np.sum(magnitudes[l_mask]))
 
         ratio = peak_energy / local_energy if local_energy > 0 else 0.0
+        global_ratio = peak_energy / current_target_energy if current_target_energy > 0 else 0.0
+
+        self.peak_history.append(peak_energy)
+        self.local_history.append(local_energy)
+
+        is_rune_detected = False
+
+        if ratio >= self.min_ratio and global_ratio >= self.min_global_ratio and not np.isnan(ratio):
+            is_rune_detected = True
+
+        # Dynamische Analyse für das Chaos Sanctuary (Kampflärm)
+        if len(self.peak_history) >= 5 and not is_rune_detected:
+            past_peaks = list(self.peak_history)[:-1]
+            past_locals = list(self.local_history)[:-1]
+
+            baseline_peak = np.mean(past_peaks)
+            baseline_local = np.mean(past_locals)
+
+            spike_peak = peak_energy / baseline_peak if baseline_peak > 0.01 else 1.0
+            spike_local = local_energy / baseline_local if baseline_local > 0.01 else 1.0
+
+            if (spike_peak > 1.8) and (spike_peak > spike_local * 1.5) and global_ratio > (self.min_global_ratio * 0.7):
+                is_rune_detected = True
 
         now = time.time()
 
-        if ratio > self.min_ratio and not np.isnan(ratio) and (now - self.last_detection) > 2.5:
+        if is_rune_detected and (now - self.last_detection) > 2.5:
             self.last_detection = now
             self.callback()
 

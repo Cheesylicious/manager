@@ -34,7 +34,7 @@ class AudioCaptureWindow(ctk.CTkToplevel):
         self.on_complete_callback = on_complete_callback
 
         self.title("Runen-Sound anlernen")
-        self.geometry("420x350")
+        self.geometry("420x390")
         self.attributes("-topmost", True)
         self.grab_set()
 
@@ -49,7 +49,7 @@ class AudioCaptureWindow(ctk.CTkToplevel):
 
         self.lbl_info = ctk.CTkLabel(
             self,
-            text="Wähle unten dein Ingame-Audiogerät aus.\nLasse eine Rune fallen, das Tool liest die\nexakte Frequenz-DNA aus der Schablone aus.",
+            text="Wähle unten dein Ingame-Audiogerät aus.\nLasse eine Rune fallen. Das Tool filtert dumpfe UI-\nGeräusche heraus und extrahiert den reinen Ring.",
             font=("Roboto", 11), text_color="#aaaaaa", justify="center"
         )
         self.lbl_info.pack(pady=5)
@@ -83,10 +83,21 @@ class AudioCaptureWindow(ctk.CTkToplevel):
         )
         self.dropdown_device.pack(pady=10)
 
+        # NEU: Kontrollkästchen zum Ein-/Ausschalten des Alarms
+        self.enable_var = ctk.BooleanVar(value=self.config_data.get("audio_popup_enabled", True))
+        self.chk_enable = ctk.CTkCheckBox(
+            self, text="Audio-Alarm im Spiel aktivieren",
+            variable=self.enable_var,
+            command=self._toggle_audio_alarm,
+            text_color="#00ccff",
+            font=("Roboto", 12, "bold")
+        )
+        self.chk_enable.pack(pady=(5, 15))
+
         self.btn_start = ctk.CTkButton(self, text="🔴 Aufnahme starten (4 Sek)", height=32,
                                        fg_color="#cf222e", hover_color="#a40e26", font=("Roboto", 12, "bold"),
                                        command=self.start_recording)
-        self.btn_start.pack(pady=15)
+        self.btn_start.pack(pady=5)
 
         self.progress_bar = ctk.CTkProgressBar(self, width=250)
         self.progress_bar.set(0)
@@ -98,6 +109,10 @@ class AudioCaptureWindow(ctk.CTkToplevel):
         self.vol_bar = ctk.CTkProgressBar(self, width=250, progress_color="#555555")
         self.vol_bar.set(0)
         self.vol_bar.pack_forget()
+
+    def _toggle_audio_alarm(self):
+        self.config_data["audio_popup_enabled"] = self.enable_var.get()
+        TrackerConfig.save(self.config_data)
 
     def start_recording(self):
         if pyaudio is None:
@@ -137,7 +152,6 @@ class AudioCaptureWindow(ctk.CTkToplevel):
                 wf.setframerate(samplerate)
                 wf.writeframes(scaled.tobytes())
 
-            print(f"✅ [Audio-Sensor] Aufnahme gespeichert unter: {filepath}")
         except Exception as e:
             print(f"❌ [Audio-Sensor] Fehler beim Speichern der WAV: {e}")
 
@@ -164,7 +178,6 @@ class AudioCaptureWindow(ctk.CTkToplevel):
             total_chunks = int((samplerate / chunk_size) * duration)
             frames = []
 
-            # FIX: Direkter blockierender Stream verhindert Stottern und Buffer Overflows
             stream = p.open(format=pyaudio.paFloat32,
                             channels=channels,
                             rate=samplerate,
@@ -175,7 +188,6 @@ class AudioCaptureWindow(ctk.CTkToplevel):
             stream.start_stream()
 
             for i in range(total_chunks):
-                # exception_on_overflow=False verhindert Abstürze bei minimalen Verzögerungen
                 data = stream.read(chunk_size, exception_on_overflow=False)
                 frames.append(data)
 
@@ -201,7 +213,6 @@ class AudioCaptureWindow(ctk.CTkToplevel):
 
         self.after(0, lambda: self.lbl_info.configure(text="Lese DNA aus Audio-Schablone...", text_color="#aaaaaa"))
 
-        # Kanal 0 (Links) isolieren, um 3D-Sound Phasenprobleme zu verhindern
         if channels > 1:
             recording = recording.reshape(-1, channels)
             audio_data = recording[:, 0]
@@ -214,7 +225,7 @@ class AudioCaptureWindow(ctk.CTkToplevel):
         step_size = 2048
 
         best_chunk_mags = None
-        max_hf_energy = 0.0
+        max_target_energy = 0.0
         best_frequencies = None
 
         for i in range(0, len(audio_data) - window_size, step_size):
@@ -226,29 +237,29 @@ class AudioCaptureWindow(ctk.CTkToplevel):
             frequencies = np.fft.rfftfreq(len(chunk), 1.0 / samplerate)
             magnitudes = np.abs(fft_result)
 
-            hf_mask = (frequencies >= 4000) & (frequencies <= 16000)
-            energy = float(np.sum(magnitudes[hf_mask]))
+            search_mask = (frequencies >= 1000) & (frequencies <= 12000)
+            energy = float(np.sum(magnitudes[search_mask]))
 
-            if energy > max_hf_energy and not np.isnan(energy) and not np.isinf(energy):
-                max_hf_energy = energy
+            if energy > max_target_energy and not np.isnan(energy) and not np.isinf(energy):
+                max_target_energy = energy
                 best_chunk_mags = magnitudes
                 best_frequencies = frequencies
 
-        if max_hf_energy < 0.1 or best_chunk_mags is None:
+        if max_target_energy < 0.1 or best_chunk_mags is None:
             self.after(0, lambda: self.lbl_info.configure(text="Stille! Blockiert Windows das Desktop-Audio?",
                                                           text_color="#cf222e"))
             self.after(0, lambda: self.btn_start.configure(state="normal", text="🔴 Erneut versuchen"))
             return
 
-        hf_mask = (best_frequencies >= 4000) & (best_frequencies <= 16000)
-        valid_freqs = best_frequencies[hf_mask]
-        valid_mags = best_chunk_mags[hf_mask]
+        search_mask = (best_frequencies >= 1000) & (best_frequencies <= 12000)
+        valid_freqs = best_frequencies[search_mask]
+        valid_mags = best_chunk_mags[search_mask]
 
         sorted_indices = np.argsort(valid_mags)[::-1]
         top_freqs = []
         for idx in sorted_indices:
             f = float(valid_freqs[idx])
-            if all(abs(f - picked_f) > 400 for picked_f in top_freqs):
+            if all(abs(f - picked_f) > 200 for picked_f in top_freqs):
                 top_freqs.append(f)
             if len(top_freqs) >= 3:
                 break
@@ -263,17 +274,22 @@ class AudioCaptureWindow(ctk.CTkToplevel):
 
         tonality_ratio = peak_energy / local_energy if local_energy > 0 else 0.0
 
-        min_energy = max(0.2, max_hf_energy * 0.10)
-        min_ratio = max(0.20, tonality_ratio * 0.40)
+        total_target_energy = float(np.sum(best_chunk_mags[search_mask]))
+        global_ratio = peak_energy / total_target_energy if total_target_energy > 0 else 0.0
+
+        min_energy = max(0.1, max_target_energy * 0.08)
+        min_ratio = max(0.20, tonality_ratio * 0.45)
+        min_global_ratio = max(0.10, global_ratio * 0.35)
 
         self.config_data["audio_target_freqs"] = top_freqs
         self.config_data["audio_min_energy"] = float(min_energy)
         self.config_data["audio_min_ratio"] = float(min_ratio)
+        self.config_data["audio_min_global_ratio"] = float(min_global_ratio)
         self.config_data["audio_output_device_name"] = selected_spk_name
         TrackerConfig.save(self.config_data)
 
         freq_str = ", ".join([f"{int(f)}" for f in top_freqs])
-        success_msg = f"DNA extrahiert!\nFreq: [{freq_str}] Hz\nMin Energie: {min_energy:.2f} | Min Schärfe: {min_ratio:.2f}"
+        success_msg = f"DNA extrahiert (Präzisions-Modus)!\nFreq: [{freq_str}] Hz"
 
         self.after(0, lambda: self.lbl_info.configure(text=success_msg, text_color="#2da44e"))
         self.after(0, lambda: self.btn_start.configure(state="normal", text="✅ Fertig", fg_color="#2da44e",

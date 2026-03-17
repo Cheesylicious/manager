@@ -17,7 +17,6 @@ except ImportError:
     except ImportError:
         sys_hooks = None
 
-# Einbindung des Audio-Detektors
 try:
     from audio_rune_detector import AudioRuneDetector
 except ImportError:
@@ -27,10 +26,14 @@ except ImportError:
 class PotionLogicMixin:
 
     def _on_rune_audio_detected(self):
+        # Der Schalter blockiert hier sofort das Pop-up und den Alarm-Sound,
+        # falls der Nutzer das Häkchen in der UI entfernt hat.
+        if not self.config_data.get("audio_popup_enabled", True):
+            return
+
         self.last_audio_rune_drop = time.time()
         print("🔊 [Audio-Sensor] Runen-Drop akustisch erkannt!")
 
-        # Sichere Weitergabe an den Haupt-GUI-Thread, um das Pop-up zu öffnen
         if hasattr(self, 'show_audio_notification'):
             self.after(0, self.show_audio_notification)
 
@@ -48,7 +51,6 @@ class PotionLogicMixin:
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             if not hwnd: return False
 
-            # Berücksichtigung des Multiboxing-Bindings
             if getattr(self, "bound_hwnd", None) is not None:
                 return hwnd == self.bound_hwnd
 
@@ -79,11 +81,9 @@ class PotionLogicMixin:
                 self.sensors_ui[key]["status"].configure(text=f"LOW [{assigned_key}]", text_color="#FF3333")
 
     def _logic_loop(self):
-        # Initialisierung der Multiboxing-Timer Variablen
         self.is_tabbed_out = False
         self.tabbed_out_at = 0
 
-        # Audio-Detektor initialisieren und Config übergeben
         self.last_audio_rune_drop = 0
         self.audio_detector = None
         if AudioRuneDetector:
@@ -135,7 +135,7 @@ class PotionLogicMixin:
                         self.lbl_status.configure(text="AKTIV IM SPIEL", text_color="#2da44e")
                         now = time.time()
 
-                        if self.zone_watcher:
+                        if getattr(self, "zone_watcher", None):
                             current_z = self.zone_watcher.current_zone
                             if current_z != self.last_zone_check:
                                 if not self.is_capturing_zone:
@@ -152,27 +152,28 @@ class PotionLogicMixin:
 
                         if now - self.last_xp_check > 2.0:
                             self.last_xp_check = now
-                            self._update_xp_display(do_scan=True)
+                            if hasattr(self, '_update_xp_display'):
+                                self._update_xp_display(do_scan=True)
 
-                        hp_match, hp_col = self._check_color(self.sensors["hp_sensor"], "hp")
-                        mp_match, mp_col = self._check_color(self.sensors["mana_sensor"], "mana")
-                        mc_match, mc_col = self._check_color(self.sensors["merc_sensor"], "merc")
+                        hp_match, hp_col = self._check_color(self.sensors.get("hp_sensor"), "hp")
+                        mp_match, mp_col = self._check_color(self.sensors.get("mana_sensor"), "mana")
+                        mc_match, mc_col = self._check_color(self.sensors.get("merc_sensor"), "merc")
 
-                        if not hp_match and now - self.last_potions["hp"] > self.hp_delay:
+                        if not hp_match and now - self.last_potions.get("hp", 0) > self.hp_delay:
                             self._press_key(self.hp_key)
                             self.last_potions["hp"] = now
                             if self.hp_sound and now - self.last_alarm_time > 2:
                                 threading.Thread(target=lambda: winsound.Beep(450, 250), daemon=True).start()
                                 self.last_alarm_time = now
 
-                        if not mp_match and now - self.last_potions["mana"] > self.mana_delay:
+                        if not mp_match and now - self.last_potions.get("mana", 0) > self.mana_delay:
                             self._press_key(self.mana_key)
                             self.last_potions["mana"] = now
                             if self.mana_sound and now - self.last_alarm_time > 2:
                                 threading.Thread(target=lambda: winsound.Beep(2000, 100), daemon=True).start()
                                 self.last_alarm_time = now
 
-                        if not mc_match and now - self.last_potions["merc"] > self.merc_delay:
+                        if not mc_match and now - self.last_potions.get("merc", 0) > self.merc_delay:
                             self._press_key(self.merc_key, True)
                             self.last_potions["merc"] = now
                             if self.merc_sound and now - self.last_alarm_time > 2:
@@ -191,9 +192,11 @@ class PotionLogicMixin:
                     elif self.current_state == "MENU":
                         self.lbl_status.configure(text="MENÜ / LOBBY", text_color="#cf222e")
 
-                        if not self.is_capturing_zone:
-                            self.lbl_zone.configure(text="📍 Zone: (Menü)", text_color="#aaaaaa")
-                            self.btn_capture_zone.pack_forget()
+                        if not getattr(self, "is_capturing_zone", False):
+                            if hasattr(self, 'lbl_zone'):
+                                self.lbl_zone.configure(text="📍 Zone: (Menü)", text_color="#aaaaaa")
+                            if hasattr(self, 'btn_capture_zone'):
+                                self.btn_capture_zone.pack_forget()
                         self.last_zone_check = ""
                 else:
                     if not self.is_tabbed_out:
@@ -203,9 +206,11 @@ class PotionLogicMixin:
 
                     self.lbl_status.configure(text="TABBED OUT (Auto-Pot PAUSE)", text_color="#FF9500")
 
-                    if not self.is_capturing_zone:
-                        self.lbl_zone.configure(text="📍 Zone: (Pausiert)", text_color="#aaaaaa")
-                        self.btn_capture_zone.pack_forget()
+                    if not getattr(self, "is_capturing_zone", False):
+                        if hasattr(self, 'lbl_zone'):
+                            self.lbl_zone.configure(text="📍 Zone: (Pausiert)", text_color="#aaaaaa")
+                        if hasattr(self, 'btn_capture_zone'):
+                            self.btn_capture_zone.pack_forget()
                     self.last_zone_check = ""
 
                     for key in ["hp", "mana", "merc"]:
