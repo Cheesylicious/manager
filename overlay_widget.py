@@ -69,6 +69,11 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         ctk.CTkCheckBox(d_frame, text="🔸 Runen Alarm:", variable=self.drop_var, command=self.save_drop,
                         text_color="#FFD700").pack(side="left", padx=(0, 5))
 
+        # NEU: Der Audio-Pop-up Schalter, direkt neben dem Runen-Alarm
+        self.audio_popup_var = ctk.BooleanVar(value=self.config_data.get("audio_popup_enabled", True))
+        ctk.CTkCheckBox(d_frame, text="🔊 Audio-Pop-up", variable=self.audio_popup_var, command=self.save_audio_popup,
+                        text_color="#00ccff").pack(side="left", padx=(5, 10))
+
         self.btn_rune_filter = ctk.CTkButton(d_frame, text="⚙️ Filter einstellen", width=120,
                                              command=self.open_rune_filter, fg_color="#444444")
         self.btn_rune_filter.pack(side="left", padx=(5, 5))
@@ -108,7 +113,6 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
         self.pickup_max_entry.bind("<KeyRelease>", lambda e: self.save_pickup_delay())
         self.pickup_max_entry.pack(side="left")
 
-        # NEU: Teleport-Pickup Toggle und Keybind
         self.tp_pickup_var = ctk.BooleanVar(value=self.config_data.get("teleport_pickup", False))
         ctk.CTkCheckBox(p_frame, text="⚡ TP-Pickup", variable=self.tp_pickup_var, command=self.save_tp_pickup,
                         text_color="#00ccff").pack(side="left", padx=(5, 5))
@@ -265,6 +269,13 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             self.overlay.drop_watcher.config = self.config_data
             self.overlay.drop_watcher.update_config(is_active)
 
+    # NEU: Speichern der Audio-Popup Einstellungen
+    def save_audio_popup(self):
+        self.config_data["audio_popup_enabled"] = self.audio_popup_var.get()
+        TrackerConfig.save(self.config_data)
+        if self.overlay:
+            self.overlay.reload_config()
+
     def save_pickup(self):
         is_active = self.pickup_var.get()
         self.config_data["auto_pickup"] = is_active
@@ -276,14 +287,12 @@ class TrackerConfigurator(ctk.CTkScrollableFrame):
             self.overlay.drop_watcher.config = self.config_data
             if is_active: self.overlay.drop_watcher.update_config(True)
 
-    # NEU: Speichern des TP Checkbox Status
     def save_tp_pickup(self):
         self.config_data["teleport_pickup"] = self.tp_pickup_var.get()
         TrackerConfig.save(self.config_data)
         if self.overlay and hasattr(self.overlay, 'drop_watcher') and self.overlay.drop_watcher:
             self.overlay.drop_watcher.config = self.config_data
 
-    # NEU: Speichern der TP Taste
     def save_tp_key(self, choice):
         self.config_data["teleport_key"] = choice
         TrackerConfig.save(self.config_data)
